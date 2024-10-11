@@ -1,21 +1,31 @@
-const mineflayer = require('mineflayer')
-//const mcData = require('minecraft-data')('1.12.2')
+const mineflayer = require('mineflayer');
+const PrettyError = require('pretty-error');
 
-const pvp = require('mineflayer-pvp').plugin
+const { pathfinder, Movements } = require('mineflayer-pathfinder');
+const { GoalFollow } = require('mineflayer-pathfinder').goals;
+const pvp = require('mineflayer-pvp').plugin;
+const pvpLibrary = require('mineflayer-pvp');
 
-const { pathfinder, Movements } = require('mineflayer-pathfinder')
-const { GoalFollow } = require('mineflayer-pathfinder').goals
+const bloodhoundPlugin = require('mineflayer-bloodhound')(mineflayer);
 
-const { create, all } = require('mathjs')
-const math = create(all)
+const { screen, chatBox, functionBox, logBox, inputBox } = require('./scripts/ui');
 
-const {screen, chatBox, functionBox, logBox, inputBox} = require('./scripts/ui')
-const errorHandler = require('./scripts/error-handling')
+const fs = require('fs');
 
-const host = process.argv[2]     || 'mlegacy.ru'
-const username = process.argv[3] 
-const password = process.argv[4] 
-const master = process.argv[5]   
+const nbt = require('prismarine-nbt');
+const Item = require('prismarine-item')('1.12.2')
+
+const util = require('util');
+
+const pe = new PrettyError();
+pe.skipNodeFiles();
+pe.skipPackage('blessed', 'vm');
+pe.skipPath(__filename);
+
+const host = process.argv[2];
+const username = process.argv[3];
+const password = process.argv[4]; 
+const master = process.argv[5];
 
 const bot = mineflayer.createBot(
   {
@@ -24,123 +34,483 @@ const bot = mineflayer.createBot(
     username: username,
     logErrors: false,
     hideErrors: true,
+    checkTimeoutInterval: 60*1000,
     version: '1.12.2'
   }
-)
+);
 
-const logError = errorHandler(bot)
+const movements = new Movements(bot, bot.registry);
 
-// LOAD PLUGINS //
-bot.loadPlugin(pathfinder)
-bot.loadPlugin(pvp)
+const status = {
+  debug: '{white-bg}{black-fg}DEBUG{/} ',
+  info: '{cyan-bg}{black-fg}INFO{/} ',
+  ok: '{green-bg}{black-fg}OKAY{/} ',
+  warn: '{yellow-bg}{black-fg}WARN{/} ',
+  error: '{red-bg}{white-fg}ERROR{/} ',
+  verbose: '{magenta-bg}{black-fg}VERBOSE{/} ',
+  combat: '{red-bg}{white-fg}COMBAT{/} '
+};
 
-const movements = new Movements(bot, bot.registry)
+let isLogging = true;
+let isVerbose = false;
 
-const logging = true
+let isAutoEquipping = true;
+let isWindowLocked = false;
 
-const targetUsername = null
-const targetHealth = null
-const allyUsername = null
-const lastEquippedId = null
+let [isHunting, isHealing, isEquippingOffHand, isEquippingMainHand] = [false, false, false, false];
+let [armorStrikes, gappleStrikes, swordStrikes, totemStrikes, junkStrikes, buffStrikes, pearlStrikes, pvpStrikes] = [0, 0, 0, 0, 0, 0, 0, 0];
 
-const isHunting = false
-const isHealing = false
+let pvpHitAttempts = 0;
+let pvpHitSuccess = 0;
 
-const isAutoEquipping = true
 
-const isEquippingArmor = false
-const isEquippingOffHand = false
+const bootsNbt = {
+  type: 'compound',
+  name: '',
+  value: {
+    CanDestroy: { type: 'list', value: { type: 'end', value: [] } },
+    HideFlags: { type: 'int', value: 1 },
+    display: {
+      type: 'compound',
+      value: {
+        Lore: { type: 'list', value: { type: 'string', value: [ 'BOOTS' ] } }
+      }
+    },
+    ench: {
+      type: 'list',
+      value: {
+        type: 'compound',
+        value: [
+          {
+            id: { type: 'short', value: 0 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 1 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 2 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 3 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 4 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 8 },
+            lvl: { type: 'short', value: 3 }
+          },
+          {
+            id: { type: 'short', value: 9 },
+            lvl: { type: 'short', value: 2 }
+          },
+          {
+            id: { type: 'short', value: 34 },
+            lvl: { type: 'short', value: 3 }
+          },
+          {
+            id: { type: 'short', value: 70 },
+            lvl: { type: 'short', value: 1 }
+          },
+          {
+            id: { type: 'short', value: 71 },
+            lvl: { type: 'short', value: 1 }
+          }
+        ]
+      }
+    }
+  }
+}
+const leggingsNbt = {
+    type: 'compound',
+    name: '',
+    value: {
+      CanDestroy: { type: 'list', value: { type: 'end', value: [] } },
+      HideFlags: { type: 'int', value: 1 },
+      display: {
+        type: 'compound',
+        value: {
+          Lore: {
+            type: 'list',
+            value: { type: 'string', value: [ 'LEGGINGS' ] }
+          }
+        }
+      },
+      ench: {
+        type: 'list',
+        value: {
+          type: 'compound',
+          value: [
+            {
+              id: { type: 'short', value: 0 },
+              lvl: { type: 'short', value: 4 }
+            },
+            {
+              id: { type: 'short', value: 1 },
+              lvl: { type: 'short', value: 4 }
+            },
+            {
+              id: { type: 'short', value: 3 },
+              lvl: { type: 'short', value: 4 }
+            },
+            {
+              id: { type: 'short', value: 4 },
+              lvl: { type: 'short', value: 4 }
+            },
+            {
+              id: { type: 'short', value: 34 },
+              lvl: { type: 'short', value: 3 }
+            },
+            {
+              id: { type: 'short', value: 70 },
+              lvl: { type: 'short', value: 1 }
+            },
+            {
+              id: { type: 'short', value: 71 },
+              lvl: { type: 'short', value: 1 }
+            }
+          ]
+        }
+      }
+    }
+  }
+const chestplateNbt = {
+  type: 'compound',
+  name: '',
+  value: {
+    CanDestroy: { type: 'list', value: { type: 'end', value: [] } },
+    HideFlags: { type: 'int', value: 1 },
+    display: {
+      type: 'compound',
+      value: {
+        Lore: {
+          type: 'list',
+          value: { type: 'string', value: [ 'HELMET' ] }
+        }
+      }
+    },
+    ench: {
+      type: 'list',
+      value: {
+        type: 'compound',
+        value: [
+          {
+            id: { type: 'short', value: 0 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 1 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 3 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 4 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 5 },
+            lvl: { type: 'short', value: 3 }
+          },
+          {
+            id: { type: 'short', value: 6 },
+            lvl: { type: 'short', value: 1 }
+          },
+          {
+            id: { type: 'short', value: 34 },
+            lvl: { type: 'short', value: 3 }
+          },
+          {
+            id: { type: 'short', value: 70 },
+            lvl: { type: 'short', value: 1 }
+          },
+          {
+            id: { type: 'short', value: 71 },
+            lvl: { type: 'short', value: 1 }
+          }
+        ]
+      }
+    }
+  }
+}
+const helmetNbt = {
+  type: 'compound',
+  name: '',
+  value: {
+    CanDestroy: { type: 'list', value: { type: 'end', value: [] } },
+    HideFlags: { type: 'int', value: 1 },
+    display: {
+      type: 'compound',
+      value: {
+        Lore: {
+          type: 'list',
+          value: { type: 'string', value: [ 'CHESTPLATE' ] }
+        }
+      }
+    },
+    ench: {
+      type: 'list',
+      value: {
+        type: 'compound',
+        value: [
+          {
+            id: { type: 'short', value: 0 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 1 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 3 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 4 },
+            lvl: { type: 'short', value: 4 }
+          },
+          {
+            id: { type: 'short', value: 34 },
+            lvl: { type: 'short', value: 3 }
+          },
+          {
+            id: { type: 'short', value: 70 },
+            lvl: { type: 'short', value: 1 }
+          },
+          {
+            id: { type: 'short', value: 71 },
+            lvl: { type: 'short', value: 1 }
+          }
+        ]
+      }
+    }
+  }
+}
+const swordNbt = {
+  type: 'compound',
+  name: '',
+  value: {
+    CanDestroy: { type: 'list', value: { type: 'end', value: [] } },
+    HideFlags: { type: 'int', value: 1 },
+    display: {
+      type: 'compound',
+      value: {
+        Lore: { type: 'list', value: { type: 'string', value: [ 'SWORD' ] } }
+      }
+    },
+    ench: {
+      type: 'list',
+      value: {
+        type: 'compound',
+        value: [
+          {
+            id: { type: 'short', value: 16 },
+            lvl: { type: 'short', value: 5 }
+          },
+          {
+            id: { type: 'short', value: 17 },
+            lvl: { type: 'short', value: 5 }
+          },
+          {
+            id: { type: 'short', value: 18 },
+            lvl: { type: 'short', value: 5 }
+          },
+          {
+            id: { type: 'short', value: 20 },
+            lvl: { type: 'short', value: 2 }
+          },
+          {
+            id: { type: 'short', value: 21 },
+            lvl: { type: 'short', value: 3 }
+          },
+          {
+            id: { type: 'short', value: 22 },
+            lvl: { type: 'short', value: 3 }
+          },
+          {
+            id: { type: 'short', value: 34 },
+            lvl: { type: 'short', value: 3 }
+          },
+          {
+            id: { type: 'short', value: 70 },
+            lvl: { type: 'short', value: 1 }
+          },
+          {
+            id: { type: 'short', value: 71 },
+            lvl: { type: 'short', value: 1 }
+          }
+        ]
+      }
+    }
+  }
+}
 
-const isRetreating = false
-const isWindowLocked = false
+const potionNbt = {
+  type: 'compound',
+  name: '',
+  value: {
+    display: {
+      type: 'compound',
+      value: {
+        Lore: {
+          type: 'list',
+          value: { type: 'string', value: [ 'POTION' ] }
+        }
+      }
+    },
+    Potion: { type: 'string', value: 'minecraft:strong_strength' }
+  }
+}
 
-const isEffectStrenght = false
+const nbtBlock = {
+  bootsNbt: bootsNbt, leggingsNbt: leggingsNbt, chestplateNbt: chestplateNbt, helmetNbt: helmetNbt, swordNbt: swordNbt, potionNbt: potionNbt
+}
+// This is a fucked up way to do this, use a separate file for nbt pls
 
-bot.once('spawn', () => {
-  bot.pvp.movements.allowFreeMotion = false
-  bot.pvp.movements.canOpenDoors = false
-  bot.pvp.movements.maxDropDown = 256
+const cooldown = {}
+//
+// LOAD PLUGINS
+//
+bot.once('inject_allowed', () => {
+  bot.loadPlugin(pathfinder);
+  bot.loadPlugin(pvp);
+  bloodhoundPlugin(bot);
 
-  bot.pvp.movements.scafoldingBlocks = [null]
-  bot.pvp.movements.canDig = false
-  bot.pvp.attackRange = 20
+  bot.bloodhound.yaw_correlation_enabled = true;
 
-  bot.pvp.movements.blocksToAvoid.add(bot.registry.blocksByName.water.id)
-  bot.pvp.movements.blocksToAvoid.add(bot.registry.blocksByName.lava.id)
+  bot.pvp.movements.allowEntityDetection = false;
+  // 1 
+  bot.pvp.movements.allowFreeMotion = true;
+  bot.pvp.movements.allowParkour = true;
+  bot.pvp.movements.maxDropDown = 255;
 
-  movements.allowFreeMotion = false
-  movements.canOpenDoors = false
-  movements.maxDropDown = 256
+  bot.pvp.movements.allow1by1towers = false;
+  bot.pvp.movements.canOpenDoors = false;
+  bot.pvp.movements.canDig = false;
 
-  movements.scafoldingBlocks = [null]
-  movements.canDig = false
+  bot.pvp.movements.scafoldingBlocks = [null];
 
-  movements.blocksToAvoid.add(bot.registry.blocksByName.water.id)
-  movements.blocksToAvoid.add(bot.registry.blocksByName.lava.id)
+  bot.pvp.movements.infiniteLiquidDropdownDistance = false;
+
+  //bot.pvp.attackRange = 6;
+  //bot.pvp.followRange = 2;
+
+  //bot.pvp.meleeAttackRate = new pvpLibrary.RandomTicks(10,11);
+
+  bot.pvp.movements.blocksToAvoid.add(bot.registry.blocksByName.web.id);
+  bot.pvp.movements.blocksToAvoid.add(bot.registry.blocksByName.water.id);
+  bot.pvp.movements.blocksToAvoid.add(bot.registry.blocksByName.lava.id);
+
+  movements.allowEntityDetection = false;
+  // 1 
+  movements.allowFreeMotion = true;
+  movements.allowParkour = true;
+  movements.maxDropDown = 255;
+
+  movements.allow1by1towers = false;
+  movements.canOpenDoors = false;
+  movements.canDig = false;
+
+  movements.scafoldingBlocks = [null];
+
+  movements.infiniteLiquidDropdownDistance = false;
+
+  movements.blocksToAvoid.add(bot.registry.blocksByName.web.id);
+  movements.blocksToAvoid.add(bot.registry.blocksByName.water.id);
+  movements.blocksToAvoid.add(bot.registry.blocksByName.lava.id);
 });
-bot._client.on('entity_velocity', v => {
-  if (bot.entity.id !== v.entityId) return;
-  setTimeout(() => {
-    bot.entity.velocity.x = 0
-    bot.entity.velocity.y = 0
-    bot.entity.velocity.z = 0
-  }, 0)
-});
-bot.once('spawn', () => {
-  bot.chat(`/register ${password} ${password}`);
-  bot.chat(`/l ${password}`);
-});
-bot.on('windowOpen', async (window) => {
-  if (isWindowLocked) return;
-  await bot.clickWindow(2,0,0); // mlegacy.ru
-  await window.close();
-});
+//
+// SERVER CHAT COMMANDS (AUTOMATED)
+//
+const cooldownTypes = ['pvp','gapple','pearl']
+for (const type in cooldownTypes) {
+  cooldown[cooldownTypes[type]] = {time: 0, lock: false}
+}
+
+async function handleCooldown(data, type) {
+  const regex = /\d+/;
+  const match = regex.exec(data.toString());
+  const value = match ? match[0] : null;
+
+  renderChatBox(`${status.info}Cooldown for ${type} started, ${value} seconds left`)
+  if (value > 0) cooldown[type].time = value; else return;
+
+
+  if (!cooldown[type].lock) {
+    while (cooldown[type].time > 0) {
+      cooldown[type].lock = true;
+      cooldown[type].time--;
+      await bot.waitForTicks(20);
+    }
+  }
+
+  if (cooldown[type].time <= 0 && cooldown[type].lock === true){
+    //await bot.waitForTicks(10);
+    cooldown[type].time = 0;
+    cooldown[type].lock = false;
+    renderChatBox(`${status.info}Cooldown for ${type} ended ${cooldown[type].lock} ${cooldown[type].time}`)
+  }
+}
+
+
 bot.on('message', async (data) => {
-  renderChatBox(`>>>${data.toAnsi()}<<<`)
+  const filteredMessages = [
+    /^Режим PVP, не выходите из игры \d+ секунд.*\.$/,
+    //
+  ]
+  if (!filteredMessages.some(regex => regex.test(data))) renderChatBox(`>>>${data.toAnsi()}<<<`);
+
   switch(true) {
-    //EVENTS// Осталось ждать 811 секунд. На вас наложен мут донатером mosqka. До окончания мута: 900 секунд // Вы получили мут от донатера. До окончания мута: 871 секунд<
     case data == '[❤] Иди к порталам, и выбери сервер для игры, либо воспользуйся компасом.':
-      isWindowLocked = false
-      renderLogBox(`isWindowLocked? ${isWindowLocked}`)
+      isWindowLocked = false;
+      renderChatBox(`${status.debug}isWindowLocked? ${isWindowLocked}`);
       bot.setQuickBarSlot(0);
       bot.activateItem();
     break;
-    case data == 'PVP окончено':
-      bot.chat('/bal');
-      if (isRetreating) bot.chat('/home');
-      renderLogBox('{green-fg}{bold}Exited PvP state')
+    case /^\s+Добро пожаловать на ＭｉｎｅＬｅｇａｃｙ$/.test(data):
+      isWindowLocked = true;
+      renderChatBox(`${status.debug}isWindowLocked? ${isWindowLocked}`);
     break;
-    case data == 'Вы начали PVP!':
-      isHunting = true
-      renderLogBox('{red-fg}{bold}Entered PvP state')
+    case /^Вы сможете использовать золотое яблоко через \d+ секунд.*\.$/.test(data):
+      handleCooldown(data, 'gapple');
+    break;
+    case /^Режим PVP, не выходите из игры \d+ секунд.*\.$/.test(data):
+      handleCooldown(data, 'pvp');
+    break;
+    case /^Вы сможете использовать данный предмет через \d+ сек\.$/.test(data):
+      handleCooldown(data, 'pearl');
+    break;
+    case data == 'Войдите - /login [пароль]':
+      bot.chat(`/l ${password}`)
+    break
+    case data == 'PVP окончено':
+      renderChatBox(`${status.combat}${status.info}Exited PvP state`);
     break;
     case data == '[!] Извините, но Вы не можете PvP здесь.':
-      resetconstiables()
-      renderLogBox('{red-fg}{bold}Cant PvP here, stopping')
-    break;
-    case /^Вы приглашены в клан .+ игроком .+\.$/.test(data):
-      bot.chat('/c accept')
-    break;
-    case /^Чат-игра » Решите пример: \d+ \+ \d+ кто первый решит пример, получит: \d+\$$/.test(data):
-      bot.chat(`!${math.evaluate(data.toString().match(/\d+ \+ \d+/g))}`)
-    break;
-    case /^        Добро пожаловать на ＭｉｎｅＬｅｇａｃｙ$/.test(data):
-      isWindowLocked = true
-      renderLogBox(`isWindowLocked? ${isWindowLocked}`)
-    break;
-    case /^Баланс: \$.+$/.test(data):
-      const value = data.toString().match(/[\d,.]+/);
-      if (value <= 0) return;
-      renderLogBox(`Sending {red-fg}{bold}{underline}$${value}{/} to ${master}`)
-      bot.chat(`/pay ${master} ${value}`);
+      pvpStrikes++;
+      if (pvpStrikes > 3) {
+        resetCombatVariables();
+        isHunting = false;
+        pvpStrikes = 0;
+        renderChatBox(`${status.combat}${status.info}Cant PvP here, stopping`);
+      }
     break;
   }
-});
-
+}); 
+//
+// CLI COMMANDS
+//
 inputBox.on('submit', async function (data) {
   const command = data.split(' ');
   switch(true) {
-    //TOSS
+    // TOSS
     case /^ts \d+ \d+$/.test(data):
       tossItem(command[2], command[1]);
     break;
@@ -150,335 +520,572 @@ inputBox.on('submit', async function (data) {
     case /^tsall$/.test(data):
       tossAllItems();
     break;
-    //EQUIP
+    // EQUIP
     case /^eq [\w-]+ \d+$/.test(data):
       equipItem(command[2], command[1]);
     break;
     case /^sweq$/.test(data):
-      isAutoEquipping = !isAutoEquipping
-      renderLogBox(`Switched equipping to ${isAutoEquipping}`);
+      isAutoEquipping = !isAutoEquipping;
+      renderChatBox(`${status.ok}isAutoEquipping set to ${isAutoEquipping}`);
     break;
-    //UNEQUIP
+    // UNEQUIP
     case /^uneq [\w-]+$/.test(data):
       unequipItem(command[1]);
     break;
-    case /^uneqall$/.test(data):
-      unequipArray = ['head','torso','legs','feet','off-hand']
-      for (const destination of unequipArray) await unequipItem(destination);
+    case /^uneqall$/.test(data): 
+      unequipAllItems();
     break;
+    // RESET
     case /^s$/.test(data):
-      resetconstiables();
-      renderLogBox(`{green-fg}{bold}Resetting constiables`);
-    break;
-    case /^obj$/.test(data):
-      const util = require('util')
-      renderChatBox(util.inspect(bot.nearestEntity(), false, null, true))
-    break;
-    case /^ps$/.test(data):
-      renderChatBox(`{green-fg}{bold}Logging set to ${!logging}`)
-      logging = !logging
-      renderChatBox(`{green-fg}{bold}Logging set to ${logging}`)
+      resetCombatVariables();
     break;
     case /^g$/.test(data):
-      resetconstiables();
-      isHunting = true
-      renderLogBox(`{red-fg}{bold}In combat`);
-    break;
-    case /^ret$/.test(data):
-      isRetreating = !isRetreating
-      renderLogBox(`Retreating set to {red-fg}{bold}{underline}${isRetreating}`);
+      isHunting = !isHunting;
+      if (!isHunting) resetCombatVariables();
+      renderChatBox(`${status.ok}isHunting set to ${isHunting}`);
     break;
     case /^f$/.test(data):
       followPlayer();
-      renderLogBox(`Following {red-fg}{bold}{underline}${master}`);
     break;
-    case /^c$/.test(data):
-      bot.chat(`/call ${master}`);
-      renderLogBox(`Calling {red-fg}{bold}{underline}${master}`);
+    case /^test$/.test(data): {
+      const datablock = [
+      util.inspect(bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_boots.id, null)?.nbt,{ depth: null, colors: false }),
+      util.inspect(bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_leggings.id, null)?.nbt,{ depth: null, colors: false }),
+      util.inspect(bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_chestplate.id, null)?.nbt,{ depth: null, colors: false }),
+      util.inspect(bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_helmet.id, null)?.nbt,{ depth: null, colors: false }),
+      util.inspect(bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_sword.id, null)?.nbt,{ depth: null, colors: false }),
+      util.inspect(bot.inventory.findInventoryItem(bot.registry.itemsByName.potion.id, null)?.nbt,{ depth: null, colors: false })
+      ]
+      for (const data in datablock)
+      fs.appendFile('outpuasasdt.txt', datablock[data], (err) => {
+        renderChatBox('File written successfully');
+      });
+      //
+      //renderChatBox(util.inspect(bot.getEquipmentDestSlot('off-hand')))
+      }
     break;
-    case /^b$/.test(data):
-      bot.chat('/bal');
-    break;
-    case /^i$/.test(data):
-      sayItems();
+    case /^rep$/.test(data):
+      replenishItems()
     break;
     case /^l$/.test(data):
-      sayPlayers();
+      renderChatBox(`${status.ok}isLogging set to ${!isLogging}`);
+      isLogging = !isLogging;
+      renderChatBox(`${status.ok}isLogging set to ${isLogging}`);
     break;
-    case /^r$/.test(data):
-      bot.chat('/home');
-      renderLogBox(`{bold}{green-fg}Withdrawing`);
+    case /^v$/.test(data):
+      isVerbose = !isVerbose
+      renderChatBox(`${status.ok}isVerbose set to ${isVerbose}`)
     break;
-    //case /^walk \w+ \d+$/.test(data):
-    //  botWalk(command[1], command[2])
-    //break;
-    case /^rejoin$/.test(data):
-      isWindowLocked = false
+    case /^i$/.test(data):
+      renderChatBox(sayItems());
+    break;
+    case /^p$/.test(data):
+      renderChatBox(sayPlayers());
     break;
     case /^q$/.test(data):
       bot.end();
       process.exit(0);
     default:
-      renderChatBox(`Sending >>>${data}<<<`);
+      renderChatBox(`${status.debug}Sending >>>${data}<<<`);
       bot.chat(`${data}`);
       inputBox.setValue('');
     return;
   }
   inputBox.setValue('');
 });
+//
+// RENDERING UI TEXT
+// 
 function renderChatBox(text) {
-  if (!logging) return;
-  chatBox.log(` ${text}{|}{gray-fg}${new Date().toLocaleString()}{/} `);
+  if (!isLogging) return;
+  chatBox.log(`${text}{|}{gray-fg}${new Date().toLocaleString()}{/} `);
   chatBox.scrollTo(chatBox.getScrollHeight());
   screen.render();
 }
 function renderFunctionBox(text) {
-  if (!logging) return;
-  functionBox.setContent(`${text}`);
+  if (!isLogging) return;
+  functionBox.setContent(`{center}${text}{/}`);
   functionBox.scrollTo(functionBox.getScrollHeight());
   screen.render();
 }
-function renderLogBox(text) {
-  if (!logging) return;
-  logBox.log(` ${text}{|}{gray-fg}${new Date().toLocaleString()}{/} `);
-  logBox.scrollTo(logBox.getScrollHeight());
+function logError(err) {
+  chatBox.pushLine(pe.render(err));
+  chatBox.scrollTo(chatBox.getScrollHeight());
   screen.render();
 }
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  });
-}
+//
+// FUNCTIONS: INVENTORY/SLOT MANAGEMENT
+//
 async function unequipItem (destination) {
+  const t0 = performance.now();
   try {
     await bot.unequip(destination);
-    renderLogBox(`Unequipped ${destination}`);
+    const t1 = performance.now();
+    renderChatBox(`${status.ok}Unequipped ${destination} in ${(t1 - t0).toFixed(2)}ms`);
   } catch (err) {
     logError(err.message);
   }
 }
+async function unequipAllItems() {
+  const unequipPieces = [
+    { type: 'head', slot: 5 },
+    { type: 'torso', slot: 6 },
+    { type: 'legs', slot: 7 },
+    { type: 'feet', slot: 8 },
+    { type: 'off-hand', slot: 45 }
+  ];
+  for (const piece of unequipPieces) {
+    if (bot.inventory.slots[piece.slot] != null) {
+      await bot.waitForTicks(2);
+      await unequipItem(piece.type);
+    }
+  }
+}
 async function equipItem (itemId, destination) {
-  itemId = parseInt(itemId, 10)
+  const t0 = performance.now();
+  itemId = parseInt(itemId, 10);
   if (itemId) {
     try {
       await bot.equip(itemId, destination);
-      if (!isHunting) renderLogBox(`Equipped ${itemId} to ${destination}`);
-      lastEquippedId = itemId
+      const t1 = performance.now();
+      renderChatBox(`${status.ok}Equipped ${itemId} to ${destination} in ${(t1 - t0).toFixed(2)}ms`);
     } catch (err) {
       logError(err.message);
     }
-  } else renderLogBox(`I have nothing to equip`);
+  } else renderChatBox(`${status.warn}I have nothing to equip`);
 }
 async function tossItem (itemId, amount) {
+  const t0 = performance.now();
   amount = parseInt(amount, 10);
   itemId = parseInt(itemId, 10);
   if (!itemId) {
-    renderLogBox(`I have no id of the item to toss`);
+    renderChatBox(`${status.warn}I have no id of the item to toss`);
   } else {
     try {
       if (amount) {
         await bot.toss(itemId, null, amount);
-        renderLogBox(`Tossed ${amount} x ${itemId}`);
+        const t1 = performance.now();
+        renderChatBox(`${status.ok}Tossed ${amount} x ${itemId} in ${(t1 - t0).toFixed(2)}ms`);
       } else {
         await bot.tossStack(itemId);
-        renderLogBox(`Tossed ${itemId}`);
+        const t1 = performance.now();
+        renderChatBox(`${status.ok}Tossed ${itemId} in ${(t1 - t0).toFixed(2)}ms`);
       }
     } catch (err) {
         logError(err.message);
     }
   }
 }
-async function tossAllItems (items = bot.inventory.items()) {
-   const output = items.map(itemToType)
-   for (const id of output) {
-    await sleep(50);
-    item = bot.inventory.findInventoryItem(id, null);
-    renderLogBox(`{red-fg}{bold}Tossing{blue-fg}\nID:${id}\n{magenta-fg}COUNT:${item.count}`);
-    await bot.toss(id, null, item.count);
+async function tossAllItems() {
+  const t0 = performance.now();
+  const output = bot.inventory.items().filter(item => item).map(item => item.type);
+
+  for (const id of output) {
+    const item = bot.inventory.findInventoryItem(id, null);
+
+    await bot.waitForTicks(2);
+    await tossItem(item.type, item.count);
   }
-  renderLogBox(`{green-fg}{bold}Done{/}`);
+  const t1 = performance.now();
+  renderChatBox(`${status.ok}Done in ${(t1 - t0).toFixed(2)}ms`);
 }
-function itemToType (item) {if (item) return item.type; else return;}
-function itemToString (item) {if (item) return `{yellow-fg}NAME:{magenta-fg}${item.name}\nID:{blue-fg}${item.type}\nSLOT:{green-fg}${item.slot}\nCOUNT:{yellow-fg}${item.count}`; else return '(nothing)';}
-function sayItems (items = bot.inventory.items()) {
-  const output = items.map(itemToString).join('\n')
-  if (output) {
-    renderLogBox(`Items:\n{bold}${output}{/}`);
-  } else {
-    renderLogBox(`{red-fg}{bold}Empty{/}`);
-  }
-}
-function sayPlayers () {
-  const output = Object.keys(bot.players).join('\n')
-  if (output) {
-    renderLogBox(`Players:\n{red-fg}{bold}${output}{/}`);
-  } else {
-    renderLogBox(`{red-fg}{bold}Empty{/}`)
+//
+// FUNCTIONS: MAPPING FUNCTIONS
+//
+function mapItemRarity(item) {
+  if (item && item.nbt?.value?.ench?.value?.value?.length >= 1) {
+    return `{cyan-fg}${item.name}{/} ${item.type} ${item.slot} ${item.count}`;
+  } else if (item) {
+    return `${item.name} ${item.type} ${item.slot} ${item.count}`;
   }
 }
-function followPlayer () {
-  const fplayer = bot.players[`${master}`]
-  if (!fplayer || !fplayer.entity) return
+function sayItems() {
+  const output = bot.inventory.items().map(mapItemRarity).join('\n ');
+  const outputCount = bot.inventory.items().map((item) => item).filter(Boolean).length;
+  if (output) return `${status.info}${outputCount} items in inventory\n ${output}`; else return `${status.info}Empty`;
+}
+
+function isPointIn3d(point, minCoords, maxCoords) {
+  const [x, y, z] = point;
+  const [minX, minY, minZ] = minCoords;
+  const [maxX, maxY, maxZ] = maxCoords;
+
+  return (minX <= x && x <= maxX) && (minY <= y && y <= maxY) && (minZ <= z && z <= maxZ);
+}
+
+function isPointInCylinder(point, coords, radius, height) {
+  const [px, py, pz] = point;
+  const [cx, cy, cz] = cylinderCenter;
+
+  if (pz < cz || pz > cz + height) {
+      return false;
+  }
+
+  const distanceSquared = (px - cx) ** 2 + (py - cy) ** 2;
+  return distanceSquared <= radius ** 2;
+}
+
+async function replenishItems() {
+  const data = fs.readFileSync('./inventory-nbt.conf', 'utf8');
+  const lines = data.split('\n');
+
+
+  for (const line in lines) {
+    const result = JSON.parse(lines[line]);
+
+    for (const slot in result.slots) {
+      const type = bot.registry.itemsByName[result.type].id
+
+      renderChatBox(`${status.debug}Setting ${result.type} ${type} to ${result.slots[slot]} ${result.count} ${result.metadata} ${nbtBlock[result.nbt]}`)
+
+      bot.creative.setInventorySlot(result.slots[slot],new Item(type, result.count, result.metadata, nbtBlock[result.nbt]))
+      await bot.waitForTicks(5);
+    }
+    //
+  
+  }
+
+}
+
+async function tossPearl() {
+  const filterEntity = e => e.type === 'player' && e.position.distanceTo(bot.entity.position) > 4 && bot.players[e.username]?.gamemode === 0 && e.username === bot.pvp.target?.username;
+  const entity = bot.nearestEntity(filterEntity);
+  if (!entity) return;
+
+  const distance = entity.position.distanceTo(bot.entity.position);
+
+  const g = 1.6;
+  const initialVelocity = 10; // per second
+
+  const sineTheta = (g * distance) / (initialVelocity * initialVelocity);
+
+  if (sineTheta < -1 || sineTheta > 1) {
+      throw new Error(`${status.error}The distance is too far for the given initial velocity.`);
+  }
+
+  const angleInRadians = 0.5 * Math.asin(sineTheta);
+  const angleInDegrees = angleInRadians * (180 / Math.PI);
+
+  const angleInBlocks = distance * Math.sin(angleInRadians) + 1.6;
+
+  const banner = `${status.info}${angleInRadians.toFixed(2)}rad\n${status.info}${angleInDegrees.toFixed(2)}°\n${status.info}${distance.toFixed(2)} block distance\n${status.info}${angleInBlocks.toFixed(2)} block offset`;
+  
+  renderChatBox(banner);
+
+  const pearl = bot.inventory.findInventoryItem(bot.registry.itemsByName.ender_pearl.id, null);
+  if (pearl) {
+    pearlStrikes++;
+      if (pearlStrikes >= 2) {
+        renderChatBox(`${status.warn}Pearl timeout at ${pearlStrikes}`);
+        await bot.waitForTicks(5);
+        pearlStrikes = 0;
+        return;
+      }
+    
+      if (bot.heldItem?.type != pearl.type) {
+      equipItem(pearl.type, 'hand');
+      bot.waitForTicks(2);
+    }
+
+    await bot.lookAt(entity.position.offset(0,angleInBlocks,0), true);
+    await bot.waitForTicks(2);
+
+    renderChatBox(`${status.info}Throwing pearl`);
+    bot.activateItem();
+  }
+}
+
+function sayItemCount(itemId) {
+  const slots = [bot.getEquipmentDestSlot('head'),bot.getEquipmentDestSlot('torso'),bot.getEquipmentDestSlot('legs'),bot.getEquipmentDestSlot('feet'),bot.getEquipmentDestSlot('off-hand')]
+
+  let output = bot.inventory.items().map((item) => { if (item.type === bot.registry.itemsByName[itemId].id) return item.count; }).filter(Boolean).reduce((acc, current) => acc + current, 0);;
+  for (const slot in slots) {
+    if (bot.inventory.slots[slots[slot]]?.type === bot.registry.itemsByName[itemId].id) output += bot.inventory.slots[slots[slot]]?.count;
+  }
+  return output;
+}
+//
+// FUNCTIONS: PLAYER INTERACTION
+//
+function followPlayer() {
+  const fplayer = bot.players[master];
+  if (!fplayer.entity) return;
 
   const goal = new GoalFollow(fplayer.entity, 1);
   bot.pathfinder.setMovements(movements);
   bot.pathfinder.setGoal(goal, true);
 }
-function resetconstiables () {
-  isHunting = false
-  isHealing = false
-  bot.stopDigging();
+
+function resetCombatVariables() {
   bot.pvp.forceStop();
   bot.pathfinder.setGoal(null);
+  renderChatBox(`${status.ok}resetCombatVariables completed`);
 }
-// EQUIPING //
-bot.once('spawn', () => {
-  setInterval(async() => {
-    if(!isWindowLocked || !isAutoEquipping) return;
-    //HELMET
-    if (bot.inventory.slots[5] === null) {
-      const item = bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_helmet.id, null);
+//
+// FUNCTIONS: COMBAT INVENTORY MANAGMENT
+//
+async function equipArmor() {
+  const armorPieces = [
+    { destination: 'head', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_helmet.id, null), minEnch: 9 },
+    { destination: 'torso', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_chestplate.id, null), minEnch: 7 },
+    { destination: 'legs', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_leggings.id, null), minEnch: 7 },
+    { destination: 'feet', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_boots.id, null), minEnch: 10 }
+  ];
 
-      if (item && item.customName == '§4§lbot.helmet') {
-        isEquippingArmor = true
-        await equipItem(item.type, 'head');
-      } else isEquippingArmor = false
-    } else isEquippingArmor = false
-    //CHESTPLATE
-    if (bot.inventory.slots[6] === null) {
-      const item = bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_chestplate.id, null);
-
-      if (item && item.customName == '§4§lbot.chestplate') {
-        isEquippingArmor = true
-        await equipItem(item.type, 'torso');
-      } else isEquippingArmor = false
-    } else isEquippingArmor = false
-    //LEGGINGS
-    if (bot.inventory.slots[7] === null) {
-      const item = bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_leggings.id, null);
-
-      if (item && item.customName == '§4§lbot.leggings') {
-        isEquippingArmor = true
-        await equipItem(item.type, 'legs');
-      } else isEquippingArmor = false
-    } else isEquippingArmor = false
-    //BOOTS
-    if (bot.inventory.slots[8] === null) {
-      const item = bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_boots.id, null);
-
-      if (item && item.customName == '§4§lbot.boots') {
-        isEquippingArmor = true
-        await equipItem(item.type, 'feet');
-      } else isEquippingArmor = false
-    } else isEquippingArmor = false
-    //POWDER
-    if (!bot.player.entity.effects[5] && !isHealing) {
-      isEffectStrenght = false;
-      const item = bot.inventory.findInventoryItem(bot.registry.itemsByName.gunpowder.id, null)
-      if (item) {
-        await equipItem(item.type, 'hand');
-        bot.activateItem();
-      }
-    } else isEffectStrenght = true;
-    //TOTEM
-    if (bot.inventory.slots[45] === null || bot.inventory.slots[45].type !== 449) {
-      const item = bot.inventory.findInventoryItem(bot.registry.itemsByName.totem_of_undying.id, null);
-      if (item) {
-        isEquippingOffHand = true
-        await equipItem(item.type, 'off-hand');
-      } else isEquippingOffHand = false
-    } else isEquippingOffHand = false
-    //SWORD
-    if (isHunting) {
-// §eГаусс Дробовик§e ▫ «Inf
-      const item = bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_sword.id, null)
-      if (!isHealing && item && item.customName.includes('Дробовик§e')) {
-        await equipItem(item.type, 'hand');
+  for (const piece of armorPieces) {
+    if (bot.inventory.slots[bot.getEquipmentDestSlot(piece.destination)] === null) {
+      
+      if (piece.item?.nbt && piece.item && nbt.simplify(piece.item.nbt).ench.length >= piece.minEnch) {
+        armorStrikes++;
+        if (armorStrikes >= 2) {
+          renderChatBox(`${status.warn}${piece.destination} timeout at ${armorStrikes}`);
+          await bot.waitForTicks(5);
+          armorStrikes = 0;
+          return;
+        }
+        isEquippingMainHand = true;
+        await bot.waitForTicks(2);
+        await equipItem(piece.item.type, piece.destination);
+        isEquippingMainHand = false;
       }
     }
-  }, 500)
-  setInterval(async() => {
-    if(!isWindowLocked || !isAutoEquipping) return;
-    //GAPPLE
-    if ((bot.entity.metadata[7] + bot.entity.metadata[11]) <= 13 || bot.food <= 15) {
-      const item = bot.inventory.findInventoryItem(bot.registry.itemsByName.golden_apple.id, null)
-      if (item) {
-        bot.pvp.stop();
-        isHealing = true
-        try {
-          await equipItem(item.type, 'hand');
-          bot.activateItem();
-        }
-        catch (err) {
-          logError(err.message);
-        }
-      } else isHealing = false;
-    } else isHealing = false;
-  }, 1761)
-  setInterval(async() => {
-    if (!isWindowLocked || !isAutoEquipping) return;
-    //JUNK ITEMS
-    if (!bot.pvp.target && !isEquippingArmor && !isEquippingOffHand) {
-      if (bot.inventory.findInventoryItem(bot.registry.itemsByName.compass.id, null)) {
-        const item = bot.inventory.findInventoryItem(bot.registry.itemsByName.compass.id, null);
-        await tossItem(item.type, item.count);
+  }
+}
+
+async function equipGapple() {
+  if ((bot.health + bot.entity?.metadata[11]) <= 16.5 && sayItemCount('totem_of_undying') === 0 || (bot.health + bot.entity?.metadata[11]) <= 16.5 && (bot.health + bot.entity?.metadata[11]) > 5 && sayItemCount('totem_of_undying') >= 1 || bot.food <= 14.5) {
+    const gapple = bot.inventory.findInventoryItem(bot.registry.itemsByName.golden_apple.id, null);
+    if (gapple) {
+      gappleStrikes++;
+      if (gappleStrikes >= 2) {
+        renderChatBox(`${status.warn}Gapple timeout at ${gappleStrikes} at ${(bot.health+bot.entity.metadata[11]).toFixed(2)} health`);
+        await bot.waitForTicks(45);
+        gappleStrikes = 0;
+        return;
       }
-      if (bot.inventory.findInventoryItem(bot.registry.itemsByName.knowledge_book.id, null)) {
-        const item = bot.inventory.findInventoryItem(bot.registry.itemsByName.knowledge_book.id, null);
-        await tossItem(item.type, item.count);
-      }
+      const t0 = performance.now();
+      isHealing = true;
+      isEquippingOffHand = true;
+      await bot.waitForTicks(2);
+
+      renderChatBox(`${status.debug}Healing function started at ${(bot.health+bot.entity.metadata[11]).toFixed(2)} health`);
+      await equipItem(gapple.type, 'off-hand');
+
+      renderChatBox(`${status.debug}Activating held item at ${(bot.health+bot.entity.metadata[11]).toFixed(2)} health`);
+      bot.activateItem(true);
+      await bot.waitForTicks(35);
+
+      renderChatBox(`${status.debug}Deactivating held item at ${(bot.health+bot.entity.metadata[11]).toFixed(2)} health`);
+      bot.deactivateItem();
+      isEquippingOffHand = false;
+      isHealing = false;
+      const t1 = performance.now()
+      renderChatBox(`${status.ok}Healing function finished in ${(t1 - t0).toFixed(2)}ms at ${(bot.health+bot.entity.metadata[11]).toFixed(2)} health`);
     }
-  }, 500)
-  setInterval(() => {
-    if (bot.entity.position.y <= 1) bot.chat('/home');
-  }, 500)
+  }
+}
+
+async function equipTotem() {
+  if (bot.inventory.slots[45]?.type != bot.registry.itemsByName.totem_of_undying.id) {
+    const totem = bot.inventory.findInventoryItem(bot.registry.itemsByName.totem_of_undying.id, null);
+    if (totem) {
+      totemStrikes++;
+      if (totemStrikes >= 2) {
+        renderChatBox(`${status.warn}Totem timeout at ${totemStrikes}`);
+        await bot.waitForTicks(5);
+        totemStrikes = 0;
+        return;
+      }
+      isEquippingOffHand = true;
+      await bot.waitForTicks(2);
+      await equipItem(totem.type, 'off-hand');
+      isEquippingOffHand = false;
+    }
+  } 
+}
+
+async function equipSword() {
+  bot.updateHeldItem()
+  if (bot.heldItem?.type != bot.registry.itemsByName.diamond_sword.id) {
+    const sword = bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_sword.id, null);
+    //if (!sword?.nbt) return;
+    if (sword?.nbt && sword && nbt.simplify(sword.nbt).ench.length >= 8) {
+      swordStrikes++
+      if (swordStrikes >= 2) {
+        renderChatBox(`${status.warn}Sword timeout at ${swordStrikes}`);
+        await bot.waitForTicks(5);
+        swordStrikes = 0;
+        return;
+      }
+      isEquippingMainHand = true;
+      await bot.waitForTicks(2);
+      await equipItem(sword.type, 'hand');
+      isEquippingMainHand = false;
+    }
+  }
+}
+
+async function equipBuff() { // potion 
+  bot.updateHeldItem()
+  if (bot.heldItem?.type != bot.registry.itemsByName.gunpowder.id) {
+    const buff = bot.inventory.findInventoryItem(bot.registry.itemsByName.gunpowder.id, null)
+    if (buff && !bot.entity.effects['5'] && bot.pvp.target) {
+      if (buffStrikes >= 2) {
+        renderChatBox(`${status.warn}Buff timeout at ${buffStrikes}`)
+        await bot.waitForTicks(5);
+        buffStrikes = 0;
+        return;
+      }
+      isEquippingMainHand = true;
+      await bot.waitForTicks(2);
+      await equipItem(buff.type, 'hand');
+      bot.activateItem();
+      isEquippingMainHand = false;
+    }
+  }
+}
+
+async function tossJunk() {
+  const junkArray = [
+    bot.inventory.findInventoryItem(bot.registry.itemsByName.compass.id, null), 
+    bot.inventory.findInventoryItem(bot.registry.itemsByName.knowledge_book.id, null)
+  ];
+  
+  for (const id in junkArray) {
+    const item = junkArray[id]
+    if (item) {
+      junkStrikes++;
+      if (junkStrikes >= 2) {
+        await bot.waitForTicks(5);
+        junkStrikes = 0;
+        return;
+      }
+      isEquippingMainHand = true;
+      await bot.waitForTicks(2);
+      await tossItem(item.type, item.count);
+      isEquippingMainHand = false;
+    }
+  }
+}
+//
+// FUNCTIONS: TARGETING
+//
+function huntPlayer() {
+  const filterEntity = e => e.type === 'player' && e.position.distanceTo(bot.entity.position) <= 64 && bot.players[e.username]?.gamemode === 0 && e.username != master;
+
+  const entity = bot.nearestEntity(filterEntity);
+  if (entity) { 
+    bot.pvp.attack(entity);
+    bot.lookAt(entity.position.offset(0, 1.6, 0), true);
+  } else {
+    bot.pvp.forceStop();
+  }
+}
+//
+// FUNCTION LOOP
+//
+bot.on('physicsTick', () => {
+  if (!isWindowLocked || !isAutoEquipping) return;
+  // HIGH PRIORITY
+  if (cooldown['gapple'].time === 0 && !cooldown['gapple'].lock && gappleStrikes < 2) equipGapple(); // OFFHAND
+  if (isEquippingOffHand) return;
+  // MEDIUM PRIORITY
+  if (totemStrikes < 2) equipTotem(); // OFFHAND
+  if (isEquippingMainHand) return;
+  // LOW PRIORITY*/
+  if (armorStrikes < 2) equipArmor(); // MAIN HAND
+  if (swordStrikes < 2) equipSword(); // MAIN HAND
+  // LOWER PRIORITY
+  if (isHealing) return;
+  //if (buffStrikes < 2) equipBuff(); // MAIN HAND
+  // LOWEST PRIORITY
+  if (cooldown['pearl'].time === 0 && !cooldown['pearl'].lock && pearlStrikes < 2) tossPearl(); // MAIN HAND
+  if (isHunting) huntPlayer();
+  if (isHunting) return; 
+  if (junkStrikes < 2) tossJunk(); // MAIN HAND
 });
 
-bot.once('spawn', () => {
-  setInterval(() => {
-    renderFunctionBox(
-    `IN COMBAT?:{red-fg}{bold}${isHunting}{/}` +
-    `\nSTRENGTH?:{red-fg}{bold}${isEffectStrenght}{/}` +
-    `\nHEALING?:{red-fg}{bold}${isHealing}{/}` +
-    `\nBOT NAME:{red-fg}{bold}${bot.username}{/}` +
-    `\nBOT HEALTH:{red-fg}{bold}${bot.entity.metadata[7] + bot.entity.metadata[11]}{/}` +
-    `\nALLY USERNAME:{red-fg}{bold}${allyUsername}{/}` +
-    `\nTARGET USERNAME:{red-fg}{bold}${targetUsername}{/}` +
-    `\nTARGET HEALTH:{red-fg}{bold}${targetHealth}{/}` +
-    `\nLAST EQUIP ID:{red-fg}{bold}${lastEquippedId}{/}` +
-    `\nCOORDINATES:{red-fg}{bold}${bot.entity.position}{/}` 
-    //effects: { '14': { id: 14, amplifier: 15, duration: 32767 } }
-    )
-  }, 100)
-}); // health? 3.063079595565796 metadata 7 11
+bot.on('physicsTick', () => {
+    const banner = 
+    `BU (${bot.username}) ` +
+    `BH (${(bot.health+bot.entity?.metadata[11]).toFixed(1)}) ` +
+    `EU (${bot.pvp.target?.username}) ` +
+    `EH (${(bot.pvp.target?.metadata[7]+bot.pvp.target?.metadata[11]).toFixed(1)}) ` +
+    `TC (${sayItemCount('totem_of_undying')}) ` +
+    `GC (${sayItemCount('golden_apple')}) ` + 
+    `HCLF (${sayItemCount('diamond_helmet')}/${sayItemCount('diamond_chestplate')}/${sayItemCount('diamond_leggings')}/${sayItemCount('diamond_boots')}) ` +
+    `AD (${(((363 - bot.inventory.slots[5]?.durabilityUsed) / 363) * 100).toFixed(1)} ${(((528 - bot.inventory.slots[6]?.durabilityUsed) / 528) * 100).toFixed(1)} ${(((495 - bot.inventory.slots[7]?.durabilityUsed) / 495) * 100).toFixed(1)} ${(((429 - bot.inventory.slots[8]?.durabilityUsed) / 429) * 100).toFixed(1)}) ` +
+    `HSR (${((pvpHitSuccess/pvpHitAttempts)*100).toFixed(1)}%)\n`+
+    `CD (${cooldown['pvp']?.time} ${cooldown['pvp']?.lock})(${cooldown['gapple']?.time} ${cooldown['gapple']?.lock})(${cooldown['pearl']?.time} ${cooldown['pearl']?.lock})`
+    renderFunctionBox(banner);
+}); 
+//
+// bot.on() EVENT TRIGGERS
+//
+bot.on('windowOpen', async (window) => {
+  if (isWindowLocked) return;
+  await bot.clickWindow(0,0,0); // mlegacy.ru
+  await window.close();
+});
 
-bot.on('physicTick', () => {
-  if (!isHunting || !isWindowLocked) return;
+bot._client.on('entity_velocity', () => {
+  if (isVerbose) renderChatBox(`${status.verbose}${status.debug}Velocity event triggered\n isInWater? ${bot.entity.isInWater} isInLava? ${bot.entity.isInLava} isInWeb ${bot.entity.isInWeb}\n Velocity X${bot.entity.velocity.x} Velocity Y${bot.entity.velocity.y} Velocity Z${bot.entity.velocity.z}`);
+  if (bot.entity.isInWater || bot.entity.isInLava || bot.entity.isInWeb) return;
+  setTimeout(() => {
+    bot.entity.velocity.x = 0;
+    //bot.entity.velocity.y = 0;
+    bot.entity.velocity.z = 0;
+  }, 0);
+});
 
-  const filterEntity = e => e.type === 'player' && e.position.distanceTo(bot.entity.position) < 128
-  const entityTarget = bot.nearestEntity(filterEntity);
+bot.on('scoreRemoved', () => {
+  if (cooldown['pvp'].lock || !bot.players[master]) return;
+  const dynamicKeyRegex = /^\s*.*Денег:.*\$$/;
+  const dynamicKey = Object.keys(bot.scoreboards.JampireBoard.itemsMap).find(key => dynamicKeyRegex.test(key));
 
-  if (entityTarget) {
-    const strings = [`${master}`];
-    const searchQuery = entityTarget.username
-    allyUsername = strings.filter( str => str.indexOf(searchQuery) === 0);
+  const regex = /\d+/;
+  const match = regex.exec(bot.scoreboards.JampireBoard.itemsMap[dynamicKey]?.name.toString());
+  const value = match ? match[0] : null;
 
-    const filterEnemy = e => e.type === 'player'  && e.position.distanceTo(bot.entity.position) < 128 && e.username != `${allyUsername}`
-    const enemyTarget = bot.nearestEntity(filterEnemy);
+  if (value > 0) bot.chat(`/pay ${master} ${value}`);
+});
 
-    if (enemyTarget) {
-      targetUsername = enemyTarget.username;
-      targetHealth = enemyTarget.metadata[7] + enemyTarget.metadata[11];
-      bot.pvp.attack(enemyTarget);
-    } else {
-      targetUsername = null;
-      targetHealth = null;
+/* TSIS WILL BREAK SOON
+bot.on('onCorrelateAttack', (attacker,victim) => {
+  if (victim.username === bot.username || victim.username === master) {
+    renderChatBox(`${status.combat}${status.info}${(victim.username)} attacked by ${(attacker.username)}\n BH ${(bot.health+bot.entity.metadata[11]).toFixed(2)} TC ${sayItemCount('totem_of_undying')} AC ${sayArmor()} GC ${sayItemCount('golden_apple')}`);
+    if (attacker.username != master && attacker.username != bot.username) {
+      bot.pvp.attack(attacker);
+      bot.lookAt(entity.position.offset(0, 1.6, 0), true);
     }
-  } else {
-    allyUsername = null;
-    targetUsername = null;
-    targetHealth = null;
   }
+});
+*/
+bot.on('attackedTarget', () => {
+  pvpHitAttempts++;
+  bot.setControlState('jump', true);
+  bot.setControlState('jump', false);
+});
+
+bot.on('entityHurt', entity => entity.username === bot.pvp.target?.username && pvpHitSuccess++);
+
+bot.on('death', async () => {
+  renderChatBox(`${status.combat}${status.warn}${bot.username} has died`);
+  resetCombatVariables();
+  await bot.waitForTicks(241);
+  bot.chat('/home');
+});
+
+bot.on('error', err => {
+  chatBox.pushLine(pe.render(err));
+  chatBox.scrollTo(chatBox.getScrollHeight());
+  screen.render();
+});
+
+process.on('uncaughtException', (err) => {
+  chatBox.pushLine(pe.render(err));
+  chatBox.scrollTo(chatBox.getScrollHeight());
+  screen.render();
 });
 
 screen.key(['C-z'], () => logBox.focus());
@@ -489,53 +1096,9 @@ screen.key(['return', 'enter'], () => {
   inputBox.focus();
 });
 
-screen.key(['escape'], function(ch, key) {
+screen.key(['escape'], function() {
   bot.end();
   process.exit(0);
 });
+// buffers and shit
 
-bot.on('kicked', reason => logError(reason));
-bot.on('error', err =>  logError(err));
-
-/*
-case /^st$/.test(data):
-  const weapon = 'bow'
-  const filterEntity = e => e.type === 'player' && e.position.distanceTo(bot.entity.position) < 128
-  const entity = bot.nearestEntity(filterEntity)
-  if (entity) {
-    const target = bot.hawkEye.getPlayer(entity.username) 
-    renderChatBox(target.username)
-    if (target) bot.hawkEye.autoAttack(target, weapon);
-  }
-  //const blockPosition = {
-  //  position: new Vec3(700, 223, -700),
-  //  isValid: true
-  //}
-  //bot.hawkEye.oneShot(blockPosition, weapon);
-break;
-
-const cmd = message.split(' ')
-if (cmd.length === 5) { // goto x y z
-  const x = parseInt(cmd[2] + 0, 10)
-  const y = parseInt(cmd[3], 10)
-  const z = parseInt(cmd[4] + 0, 10)
-  console.log(cmd)
-  console.log(x, y, z)
-  bot.pathfinder.setMovements(defaultMove)
-  bot.pathfinder.setGoal(new GoalBlock(x, y, z))
-} else if (cmd.length === 4) { // goto x z
-  const x = parseInt(cmd[2] + 0, 10)
-  const z = parseInt(cmd[3] + 0, 10)
-  console.log(cmd)
-  console.log(x, z)
-
-  bot.pathfinder.setMovements(defaultMove)
-  bot.pathfinder.setGoal(new GoalXZ(x, z))
-} else if (cmd.length === 3) { // goto y
-  const y = parseInt(cmd[1], 10)
-  console.log(cmd)
-  console.log(y)
-  bot.pathfinder.setMovements(defaultMove)
-  bot.pathfinder.setGoal(new GoalY(y))
-}
-*/
