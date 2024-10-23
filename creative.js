@@ -21,13 +21,16 @@ function inject (bot) {
   const creativeSlotsUpdates = []
 
   // WARN: This method should not be called twice on the same slot before first promise succeeds
+  // Counterpoint: Nuh Uh, it should
   async function setInventorySlot (slot, item) {
     assert(slot >= 0 && slot <= 45)
 
     if (Item.equal(bot.inventory.slots[slot], item, true)) return
-//    if (creativeSlotsUpdates[slot]) {
-//      throw new Error(`Setting slot ${slot} cancelled due to calling bot.creative.setInventorySlot(${slot}, ...) again`)
-//    }
+    /* MODIFIED - COMMENTED OUT
+    if (creativeSlotsUpdates[slot]) {
+      throw new Error(`Setting slot ${slot} cancelled due to calling bot.creative.setInventorySlot(${slot}, ...) again`)
+    }
+    */
     creativeSlotsUpdates[slot] = true
 
     bot._client.write('set_creative_slot', {
