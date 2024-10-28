@@ -66,15 +66,19 @@ let [isHunting, isHealing] = [false, false];
 let pvpHitAttempts = 0;
 let pvpHitSuccess = 0;
 
+let noPvPCountdownLock = false;
+
 let combatMode = 2;
 
 let allies = [master, 'Plotva', 'maksim2008'];
 
-let isJesusing = false;
-let isJesusReady = false;
-
 let tabCompleteIndex = 0;
 let tabComplete;
+
+let isChatEnabled = true;
+
+let botWebBlock;
+let entityWebBlock;
 
 const cylinder1 = {
   center: [2190.5, 0, 1003.5],
@@ -119,9 +123,14 @@ for (const type of strikeValueTypes) strikeValue[type] = 0;
 let oldHealth = 0;
 let newHealth = 0;
 let deltaHealth = 0;
+
+let isPreventing = false;
+let isJesusing = false;
+let isInLiquid = false;
 /*
   LOAD PLUGINS
 */
+
 bot.once('inject_allowed', () => {
   bot.setMaxListeners(999);
 
@@ -159,21 +168,29 @@ bot.once('inject_allowed', () => {
 });
 /*
   SERVER CHAT COMMANDS (AUTOMATED)
-*/ // ♀ ❤ Ⓛ (Militech) MILITECH Patr10t ➯ d
-bot.on('message', async (data) => {
+*/
+async function onMessage(data) {
   const filteredMessages = [
     /^Режим PVP, не выходите из игры \d+ секунд.*\.$/,
     /^\s*$/,
-    /^»+$/,
+    /^.+».+$/,
   ];
-  if (!filteredMessages.some(regex => regex.test(data))) renderChatBox(`>>>${data.toAnsi()}<<<`);
+  if (isChatEnabled && !filteredMessages.some(regex => regex.test(data))) renderChatBox(`>>>${data.toAnsi()}<<<`);
   switch(true) {
+    case /^.+Ⓖ.+MILITECH Patr10t . .+$/.test(data): {
+      const regex = /[^➯]+$/;
+      const match = regex.exec(data.toString());
+      const value = match ? match[0].trim() : null;
+      renderChatBox(`${status.info}Sending >>>${value}<<<`);
+      //bot.chat(`!${value}`);
+    }
+    break;
     case /^.+Ⓛ.+MILITECH Patr10t . .+$/.test(data): {
       const regex = /[^➯]+$/;
       const match = regex.exec(data.toString());
-      const value = match ? match[0] : null;
-      bot.chat(value.trim());
-      renderChatBox(`${status.info}Sending ${value.trim()}`);
+      const value = match ? match[0].trim() : null;
+      renderChatBox(`${status.info}Sending >>>${value}<<<`);
+      bot.chat(value);
     }
     break;
     case /^Вы были телепортированы в Lobby.+$/.test(data):
@@ -205,7 +222,8 @@ bot.on('message', async (data) => {
         "GG EZ",
         "НУЛИНА",
         "ЛЕЖАТЬ",
-        "ИЗИ БОТЯРА"];
+        "ИЗИ БОТЯРА",
+        "ЗЕМЛЯ ТЕБЕ СТЕКЛОВАТОЙ"];
       const randomIndex = Math.floor(Math.random() * insults.length);
       bot.chat(`!${bot.pvp.target.username} ${insults[randomIndex]}`);
     }
@@ -225,13 +243,13 @@ bot.on('message', async (data) => {
     break;
     case data == '[❤] Иди к порталам, и выбери сервер для игры, либо воспользуйся компасом.':
       isWindowLocked = false;
-      renderChatBox(`${status.info}isWindowLocked? ${isWindowLocked}`);
+      renderChatBox(`${status.ok}isWindowLocked? ${isWindowLocked}`);
       bot.setQuickBarSlot(0);
       bot.activateItem();
     break;
     case /^\s{43}$/.test(data):
       isWindowLocked = true;
-      renderChatBox(`${status.info}isWindowLocked? ${isWindowLocked}`);
+      renderChatBox(`${status.ok}isWindowLocked? ${isWindowLocked}`);
     break;
     case /^Вы сможете использовать золотое яблоко через \d+ секунд.*\.$/.test(data): {
       const regex = /\d+/;
@@ -264,20 +282,28 @@ bot.on('message', async (data) => {
     break;
     case data == '[!] Извините, но Вы не можете PvP здесь.':
       strikeValue['pvp']++;
-      // REWRITE THIS 
-      if (strikeValue['pvp'] > 3) {
-        resetCombatVariables();
-        isHunting = false;
-        strikeValue['pvp'] = 0;
-        renderChatBox(`${status.pvp}${status.info}Cant PvP here, stopping`);
+      if (noPvPCountdownLock) return; 
+      while(strikeValue['pvp'] > 0) {
+        noPvPCountdownLock = true;
+        strikeValue['pvp']--;
+        await bot.waitForTicks(20);
+        if (strikeValue['pvp'] >= 3) {
+          resetCombatVariables();
+          isHunting = false;
+          strikeValue['pvp'] = 0;
+          noPvPCountdownLock = false;
+          renderChatBox(`${status.pvp}${status.info}Cant PvP here, stopping`);
+        }
       }
+      noPvPCountdownLock = false
     break;
   }
-}); 
+}
+bot.on('message', async (data) => onMessage(data)); 
 /*
   CLI COMMANDS
 */
-inputBox.on('submit', async function (data) {
+inputBox.on('submit', async (data) => {
   const command = data.split(' ');
   switch(true) {
     // TOSS
@@ -333,7 +359,16 @@ inputBox.on('submit', async function (data) {
       allies = allies.filter(item => item !== command[1]);
       renderChatBox(`${status.ok}Removed ally ${command[1]}`);
     break;
-    // JSON/NBT DATA DEBUG
+    // RESTORE LOADOUT
+    case /^rep$/.test(data):
+      replenishLoadout();
+    break;
+    case /^ec$/.test(data):
+      isChatEnabled = !isChatEnabled;
+      renderChatBox(`${status.ok}isChatEnabled set to ${isChatEnabled}`);
+    break;
+    // DEBUG
+        // JSON/NBT DATA DEBUG
     case /^test$/.test(data): {
       const datablock = [
       util.inspect(bot.players['Patr10t'], { depth: null, colors: false }),
@@ -344,23 +379,13 @@ inputBox.on('submit', async function (data) {
       });
     }
     break;
-    // RESTORE LOADOUT
-    case /^rep$/.test(data):
-      replenishLoadout();
-    break;
-    // DEBUG
     case /^rg$/.test(data): {
-      const cobweb = bot.findBlocks({
-        point: bot.entity.position,
-        matching: bot.registry.blocksByName.web.id,
-        maxDistance: 10,
-        count: 1,
-      });
+      const cobweb = bot.players[master];
       if (cobweb) {
         renderChatBox(util.inspect(cobweb));
       } else renderChatBox(`${status.warn}No cobwebs found`);
     }
-    break
+    break;
     case /^l$/.test(data):
       renderChatBox(`${status.ok}isLogging set to ${!isLogging}`);
       isLogging = !isLogging;
@@ -370,7 +395,7 @@ inputBox.on('submit', async function (data) {
       renderChatBox(getItems());
     break;
     case /^p$/.test(data):
-      renderChatBox(getPlayers());
+      getPlayers()
     break;
     case /^q$/.test(data):
       bot.end();
@@ -448,20 +473,60 @@ function floorVec3(vec3) {
       z: Math.floor(vec3.z)
   };
 }
+function roundVec3(vec3) {
+  return {
+      x: Math.round(vec3.x),
+      y: Math.round(vec3.y),
+      z: Math.round(vec3.z)
+  };
+}
 function getMidpoint(point1,point2) {
-  const midpoint = {
+  return {
     x: (point1.x + point2.x) / 2,
     y: (point1.y + point2.y) / 2,
     z: (point1.z + point2.z) / 2
   };
-  return midpoint;
+}
+function updateWebBlocks() {
+  botWebBlock = bot.findBlocks({
+    point: bot.entity.position,
+    matching: bot.registry.blocksByName.web.id,
+    maxDistance: 2,
+    count: 2,
+  });
+  entityWebBlock = bot.findBlocks({
+    point: bot.pvp.target?.position,
+    matching: bot.registry.itemsByName.web.id,
+    maxDistance: 3,
+    count: 1,
+  });
+  const botPositionClone = bot.entity.position.clone();
+  const deltaPosition = bot.entity.position.y - floorVec3(botPositionClone).y;
+
+  [entityWebBlock, botWebBlock].forEach(blockArray => {
+    blockArray.forEach(block => {
+      if (blockArray === botWebBlock && block.y) {
+        block.set(
+          block.x + 0.5,
+          block.y + deltaPosition,
+          block.z + 0.5
+        );
+      } else if (block.x && block.y && block.z) {
+        block.set(
+          block.x + 0.5,
+          block.y,
+          block.z + 0.5
+        );
+      }
+    });
+  });
 }
 /*
   FUNCTIONS: PHYSICS
 */
 function jesusOnLiquid() {
   const liquidBelow = bot.blockAt(bot.entity.position.offset(0, -0.2, 0));
-  isJesusReady = (liquidBelow && (liquidBelow.name === 'water' || liquidBelow.name === 'lava'));
+  isInLiquid = (liquidBelow && (liquidBelow.name === 'water' || liquidBelow.name === 'lava'));
 
   const liquidBoundary = bot.blockAt(bot.entity.position.offset(0, -0.001, 0));
   if (bot.entity.isInWater || bot.entity.isInLava || liquidBoundary.name === 'water' || liquidBoundary.name === 'lava') {
@@ -472,60 +537,114 @@ function jesusOnLiquid() {
     isJesusing = false;
   }
 }
+function strafeMovement() {
+  const entity = bot.pvp.target;
+  const entityPos = [entity.position.x,entity.position.z];
 
-let botAltblock;
-let entAltblock;
+  const entityCloseToWebBlock = entityWebBlock[0] && entityWebBlock[0].distanceTo(entity.position) <= 1.5;
+  const botCloseToWebBlock = botWebBlock[0] && botWebBlock[0].distanceTo(bot.entity.position) < 1.1;
+  bot.pvp.followRange = (entityCloseToWebBlock || botCloseToWebBlock || isInLiquid || bot.entity.isInWater || bot.entity.isInLava || isPreventing) ? 2 : 5;
 
-function updateAltblock() {
-  botAltblock = bot.findBlocks({
-    point: bot.entity.position,
-    matching: bot.registry.blocksByName.web.id,
-    maxDistance: 2,
-    count: 2,
-  });
+  if (!isInLiquid && bot.entity.onGround && bot.entity.position.distanceTo(entity.position) <= bot.pvp.followRange && bot.pvp.followRange === 5) {
+    if (!entityWebBlock[0]) {
+      strafe(entityPos, 30, 0.6);
+    } else {
+      const entityDistToWebBlock = entityWebBlock[0].distanceTo(entity.position);
+      const strafeSpeed = entityDistToWebBlock >= 3.5 ? 0.6 : entityDistToWebBlock > 1.5 ? 0.4 : null;
+      if (strafeSpeed) {
+        strafe(entityPos, 30, strafeSpeed);
+      }
+    }
+  }
 }
 
-async function preventCobwebs() {
-  const altblock = bot.findBlocks({
-    point: bot.entity.position,
-    matching: bot.registry.blocksByName.web.id,
-    maxDistance: 2,
-    count: 2,
-  });
-
-  if (altblock.length > 0) {
-    const pos1 = altblock[0];
-    const pos2 = altblock.length > 1 ? altblock[1] : altblock[0];
+async function preventWeb() {
+  if (botWebBlock.length > 0) {
+    let pos1 = botWebBlock[0];
+    let pos2 = botWebBlock.length > 1 ? botWebBlock[1] : botWebBlock[0];
 
     const botPosClone = bot.entity.position.clone();
     const deltaPos = bot.entity.position.y - floorVec3(botPosClone).y;
 
-    pos1.set(pos1.x+0.5,pos1.y+deltaPos,pos1.z+0.5);
-    pos2.set(pos2.x+0.5,pos2.y+deltaPos,pos2.z+0.5);
+    pos1.y += deltaPos;
+    pos2.y += deltaPos;
 
-    if (pos1.distanceTo(bot.entity.position) <= 0.96 || pos2.distanceTo(bot.entity.position) <= 0.96) {
-      const cp = altblock.length > 1 
+    if (pos1.distanceTo(bot.entity.position) <= 0.97 || pos2.distanceTo(bot.entity.position) <= 0.97) {
+      isPreventing = true;
+      const webPos = botWebBlock.length > 1 
         ? getMidpoint(pos1, pos2)
         : pos1;
-      const [velocityX, velocityZ] = getStrafeVectors([cp.x, cp.z], 180, 1);
-      renderChatBox(`${status.debug}Web found at X: ${cp.x} Z: ${cp.z}, using velocity method XV: ${adjustVelocity(velocityX, 0.11)} ZV: ${adjustVelocity(velocityZ, 0.11)}`);
+      const [velocityX, velocityZ] = getStrafeVectors([webPos.x, webPos.z], 180, 1);
+      
+      renderChatBox(`${status.debug}Web found at X: ${webPos.x} Z: ${webPos.z}, using velocity method XV: ${adjustVelocity(velocityX, 0.11)} ZV: ${adjustVelocity(velocityZ, 0.11)}`);
       bot.entity.velocity.set(
         bot.entity.velocity.x + adjustVelocity(velocityX, 0.11),
         bot.entity.velocity.y,
         bot.entity.velocity.z + adjustVelocity(velocityZ, 0.11)
       );
+    } else {
+      isPreventing = false;
     }
+  } else {
+    isPreventing = false;
   }
 }
 function strafe(position,angleDegrees,speed) {
   const [velocityX,velocityZ] = getStrafeVectors(position,angleDegrees,speed);
-  if (bot.entity.onGround && !isJesusing && !isJesusReady) {
+  if (bot.entity.onGround && !isJesusing && !isInLiquid) {
     bot.entity.velocity.set(velocityX,0.42,velocityZ);
+    bot.setControlState('forward', false);
   }
 }
 /*
   FUNCTIONS: RENDERING UI TEXT
-*/ 
+*/
+function renderTable(headers, rows, type) {
+  const columnWidths = headers.map(header => header.length);
+  rows.forEach(row => {
+      row.forEach((cell, index) => {
+          columnWidths[index] = Math.max(columnWidths[index], cell.length);
+      });
+  });
+  const formatRow = (row, type) => {
+      return row.map((cell, index) => {
+        return formatCell(cell, index, type, columnWidths);
+      }).join(' | ');
+  };
+
+  renderChatBox(formatRow(headers,type));
+  renderChatBox(columnWidths.map(width => '-'.repeat(width)).join('-|-'));
+
+  rows.forEach(row => {
+      renderChatBox(`${formatRow(row,type)}`);
+  });
+}
+function formatCell(cell, index, type, columnWidths) {
+  if (type === 'players') {
+    switch (true) {
+      case allies.includes(cell):
+          return `{green-fg}${cell.padEnd(columnWidths[index])}{/}`;
+      case bot.players[cell]?.gamemode === 1:
+          return `{cyan-fg}${cell.padEnd(columnWidths[index])}{/}`;
+      case !isNaN(cell):
+          return `{green-fg}${rateIntValue(100,cell.padEnd(columnWidths[index]),true)}{/}`;
+      default:
+          return cell.padEnd(columnWidths[index]);
+    }
+  } else if (type === 'items') {
+    switch (true) { 
+      case bot.inventory.findInventoryItem(bot.registry.itemsByName[cell]?.id)?.enchants.length >= 1:
+          return `{cyan-fg}${cell.padEnd(columnWidths[index])}{/}`;
+      case cell === 'totem_of_undying':
+          return `{yellow-fg}${cell.padEnd(columnWidths[index])}{/}`;
+      case cell === 'potion':
+          return `{magenta-fg}${cell.padEnd(columnWidths[index])}{/}`;
+      default:
+          return cell.padEnd(columnWidths[index]);
+    }
+  }
+}
+
 function renderChatBox(text) {
   if (!isLogging) return;
   chatBox.log(`${text}{|}{gray-fg}${new Date().toLocaleString()}{/} `);
@@ -538,7 +657,7 @@ function renderFunctionBox(text) {
   functionBox.scrollTo(functionBox.getScrollHeight());
   screen.render();
 }
-function logError(err) {
+function renderError(err) {
   if (!isLogging) return;
   chatBox.log(pe.render(err));
   chatBox.scrollTo(chatBox.getScrollHeight());
@@ -554,7 +673,7 @@ async function unequipItem(destination) {
     const t1 = performance.now();
     renderChatBox(`${status.ok}Unequipped ${destination} in ${(t1 - t0).toFixed(2)}ms`);
   } catch (err) {
-    logError(err.message);
+    renderError(err.message);
   }
 }
 async function unequipAllItems() {
@@ -576,7 +695,7 @@ async function equipItem(itemId, destination) {
       const t1 = performance.now();
       renderChatBox(`${status.ok}Equipped ${itemId} to ${destination} in ${(t1 - t0).toFixed(2)}ms`);
     } catch (err) {
-      logError(err.message);
+      renderError(err.message);
     }
   } else renderChatBox(`${status.warn}I have nothing to equip`);
 }
@@ -598,7 +717,7 @@ async function tossItem (itemId, amount) {
         renderChatBox(`${status.ok}Tossed ${itemId} in ${(t1 - t0).toFixed(2)}ms`);
       }
     } catch (err) {
-      logError(err.message);
+      renderError(err.message);
     }
   }
 }
@@ -617,21 +736,27 @@ async function tossAllItems() {
 /*
   FUNCTIONS: INVENTORY COUNTING
 */
-function mapItemRarity(item) {
-  if (item && item.nbt?.value?.ench?.value?.value?.length >= 1) {
-    return `{cyan-fg}${item.name}{/} ${item.type} ${item.slot} ${item.count}`;
-  } else if (item) {
-    return `${item.name} ${item.type} ${item.slot} ${item.count}`;
-  }
-}
 function getPlayers() {
-  const output = Object.values(bot.players).map(player => player.username);
-  if (output) return `${status.info}${output.length} players online\n ${output.join('\n ')}`; else return `${status.info}Empty`;
+  const headers = ['Username','Ping'];
+  const rows = [];
+  Object.values(bot.players).forEach(player => {
+    let { username, ping } = player;
+    rows.push([username.toString(), ping.toString()]);
+  });
+  renderChatBox(`${status.info}${rows.length} players online`);
+  renderTable(headers, rows, 'players');
 }
 function getItems() {
-  const output = bot.inventory.items().map(mapItemRarity).join('\n ');
+  const headers = ['Name','Id','Slot','Count'];
+  const rows = [];
+
+  bot.inventory.items().map(item => {
+    let { name, type, slot, count } = item;
+    rows.push([name.toString(), type.toString(), slot.toString(), count.toString()]);
+  });
   const outputCount = bot.inventory.items().map((item) => item).filter(Boolean).length;
-  if (output) return `${status.info}${outputCount} items in inventory\n ${output}`; else return `${status.info}Empty`;
+  renderChatBox(`${status.info}${outputCount} items in inventory`);
+  renderTable(headers, rows, 'items');
 }
 function getItemCount(itemId) {
   const itemType = bot.registry.itemsByName[itemId].id;
@@ -652,14 +777,14 @@ function resetCombatVariables() {
   FUNCTIONS: COMBAT INVENTORY MANAGMENT
 */
 async function equipArmor() {
-  const armorPieces = [
+  const armorPieces = [ // REWRITE USING .enchants !!!!
     { destination: 'head', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_helmet.id, null), minEnch: 8 },
     { destination: 'torso', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_chestplate.id, null), minEnch: 6 },
     { destination: 'legs', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_leggings.id, null), minEnch: 6 },
     { destination: 'feet', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_boots.id, null), minEnch: 9 }
   ];
   for (const piece of armorPieces) {
-    if (piece.item?.nbt && piece.item && nbt.simplify(piece.item.nbt).ench.length >= piece.minEnch) {
+    if (piece.item?.nbt && piece.item && piece.item.enchants.length >= piece.minEnch) {
       if (bot.inventory.slots[bot.getEquipmentDestSlot(piece.destination)] === null || bot.inventory.slots[bot.getEquipmentDestSlot(piece.destination)].type != piece.item.type) {
         strikeValue['armor']++;
         if (strikeValue['armor'] >= 2) {
@@ -697,7 +822,7 @@ async function equipGapple() {
       renderChatBox(`${status.gapple}${status.info}STARTED Healing function`);
 
       if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != gapple.type) {
-        await bot.waitForTicks(5);
+        await bot.waitForTicks(3);
         await equipItem(gapple.type, 'off-hand');
       }
 
@@ -734,7 +859,7 @@ async function equipBuff() {
       renderChatBox(`${status.buff}${status.info}Buff STARTED`);
 
       if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != buff.type) {
-        await bot.waitForTicks(5);
+        await bot.waitForTicks(3);
         await equipItem(buff.type, 'off-hand');
       }
 
@@ -767,7 +892,7 @@ async function equipTotem() {
       }
       lockValue['off-hand'] = true;
       renderChatBox(`${status.totem}`);
-      await bot.waitForTicks(5);
+      await bot.waitForTicks(3);
       await equipItem(totem.type, 'off-hand');
       renderChatBox(`${status.totem}`);
       lockValue['off-hand'] = false;
@@ -793,14 +918,14 @@ async function tossPearl() {
       renderChatBox(`${status.pearl}${status.info}Pearl STARTED`);
 
       if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != pearl.type) {
-        await bot.waitForTicks(5);
+        await bot.waitForTicks(3);
         await equipItem(pearl.type, 'off-hand');
       }
 
       bot.pathfinder.setGoal(null);
       bot.pvp.forceStop();
 
-      await bot.lookAt(entity.position.offset(0,angleInBlocks+entity.height,0), true);
+      await bot.lookAt(entity.position.offset(0,angleInBlocks+0.8,0), true);
       await bot.waitForTicks(5);
       bot.activateItem(true);
       await bot.waitForTicks(2);
@@ -815,7 +940,7 @@ async function tossPearl() {
         handleCooldown(cooldown, 'pearl');
         renderChatBox(`${status.pearl}${status.error}Pearl FAILED`);
       }
-      isHunting = true
+      isHunting = true;
       lockValue['off-hand'] = false;
     }
   }
@@ -827,17 +952,17 @@ async function equipPassive() {
   ]
   for(const piece of itemPieces) {
     if (piece.item && piece.slotCheck?.type != piece.item.type) {
-      strikeValue['passive']++
+      strikeValue['passive']++;
       if (strikeValue['passive'] >= 2) {
         renderChatBox(`${status.passive}${status.warn}Passive timeout at ${strikeValue['passive']}`);
         await bot.waitForTicks(5);
         strikeValue['passive'] = 0;
         return;
       }
-      if ((piece.slotUsed === 'off-hand' || nbt.simplify(piece.item.nbt).ench.length >= 8) && !lockValue[piece.slotUsed]) {
+      if ((piece.slotUsed === 'off-hand' || piece.item.enchants.length >= 8) && !lockValue[piece.slotUsed]) {
         lockValue[piece.slotUsed] = true;
         renderChatBox(`${status.passive}${piece.item.displayName}`);
-        await bot.waitForTicks(5);
+        await bot.waitForTicks(3);
         await equipItem(piece.item.type, piece.slot);
         renderChatBox(`${status.passive}${piece.item.displayName}`);
         lockValue[piece.slotUsed] = false;
@@ -861,7 +986,7 @@ async function tossJunk() {
       }
       lockValue['hand'] = true;
       lockValue['off-hand'] = true;
-      await bot.waitForTicks(5);
+      await bot.waitForTicks(3);
       await tossItem(item.type, item.count);
       lockValue['hand'] = false;
       lockValue['off-hand'] = false;
@@ -875,9 +1000,7 @@ async function replenishLoadout() {
   const data = fs.readFileSync('./inventory-nbt.conf', 'utf8');
   const lines = data.split('\n');
 
-  if (cooldown['pvp'].time > 0) {
-    throw new Error(`${status.error}Exit combat before replenishing!`);
-  }
+  if (cooldown['pvp'].time > 0) throw new Error(`${status.error}Exit combat before replenishing!`);
 
   isAutoEquipping = false;
   for (const line of lines) {
@@ -895,7 +1018,7 @@ async function replenishLoadout() {
         renderChatBox(`${status.info}Gamemode: ${bot.player.gamemode} Setting ${result.type} to ${slot} ${result.count} ${result.metadata}`);
         lockValue['hand'] = true;
         lockValue['off-hand'] = true;
-        await bot.waitForTicks(5);
+        await bot.waitForTicks(3);
         bot.creative.setInventorySlot(slot, new Item(itemType, result.count, result.metadata, itemNbt));
         lockValue['hand'] = false;
         lockValue['off-hand'] = false;
@@ -936,7 +1059,7 @@ function huntPlayer() {
   if (entity) { 
     bot.pvp.attack(entity);
 
-    if(isJesusReady) {
+    if(isInLiquid) {
       if (!bot.getControlState('forward')) {
         bot.setControlState('forward', true);
       }
@@ -953,43 +1076,6 @@ function huntPlayer() {
     bot.pvp.forceStop();
   }
 }
-function strafeMovement(entity) {
-  const entityPos = [entity.position.x,entity.position.z];
-  const entAltblock = bot.findBlock({
-    point: entity.position,
-    matching: bot.registry.itemsByName.web.id,
-    maxDistance: 3,
-  });
-  const botAltblock = bot.findBlock({
-    point: bot.entity.position,
-    matching: bot.registry.itemsByName.web.id,
-    maxDistance: 2,
-  });
-
-  [entAltblock, botAltblock].forEach(block => {
-    if (block) {
-      block.position.set(
-        block.position.x + 0.5,
-        block.position.y,
-        block.position.z + 0.5
-      );
-    }
-  });
-
-  const entCloseToAltblock = entAltblock && entAltblock.position.distanceTo(entity.position) <= 1.5;
-  const botCloseToAltblock = botAltblock && botAltblock.position.distanceTo(bot.entity.position) < 0.95;
-  bot.pvp.followRange = (entCloseToAltblock || botCloseToAltblock || isJesusReady) ? 2 : 5;
-
-  if (!isJesusReady && bot.entity.onGround && bot.entity.position.distanceTo(entity.position) <= bot.pvp.followRange && bot.pvp.followRange === 5) {
-    if (!entAltblock) {
-      strafe(entityPos, 30, 0.6);
-    } else {
-      const entDistToAltblock = entAltblock.position.distanceTo(entity.position);
-      const strafeSpeed = entDistToAltblock >= 3.5 ? 0.6 : entDistToAltblock > 1.5 ? 0.4 : null;
-      if (strafeSpeed) strafe(entityPos, 30, strafeSpeed);
-    }
-  }
-}
 /*
   FUNCTION LOOP 
 */
@@ -998,7 +1084,7 @@ bot.on('physicsTick', async () => {
   // HIGHEST PRIORITY
   if (strikeValue['armor'] < 2) equipArmor(); // MAIN HAND
   if (cooldown['gapple'].time === 0 && !cooldown['gapple'].lock && strikeValue['gapple'] < 2) equipGapple(); // OFFHAND
-  if (!isHealing && !lockValue['off-hand'] ) {
+  if (!isHealing && !lockValue['off-hand']) {
     if (strikeValue['totem'] < 2) equipTotem(); // OFFHAND
     if (cooldown['buff'].time === 0 && !cooldown['buff'].lock && strikeValue['buff'] < 2) equipBuff(); // OFFHAND
     if (cooldown['pearl'].time === 0 && !cooldown['pearl'].lock && strikeValue['pearl'] < 2) tossPearl(); // OFFHAND
@@ -1012,9 +1098,10 @@ bot.on('physicsTick', async () => {
 });
 setInterval(() => {
   if (!isWindowLocked || !isAutoEquipping) return;
+  updateWebBlocks();
   jesusOnLiquid();
-  preventCobwebs();
-  if (bot.pvp.target) strafeMovement(bot.pvp.target);
+  preventWeb();
+  if (bot.pvp.target) strafeMovement();
   if (isHunting) huntPlayer();
 }, 150);
 setInterval(() => {
@@ -1024,13 +1111,12 @@ setInterval(() => {
   const leggingsPerc = (((495 - bot.inventory.slots[7]?.durabilityUsed) / 495) * 100);
   const bootsPerc = (((429 - bot.inventory.slots[8]?.durabilityUsed) / 429) * 100);
   const targetPos = [bot.pvp.target?.position.x,bot.pvp.target?.position.y,bot.pvp.target?.position.z];
-  //const 
+
   const banner =
-  // ENTITY COHESION
   `BOT ${bot.username} ${rateIntValue(36,(bot.health+bot.entity?.metadata[11]))} ${combatMode} ` +
   `TARGET ${bot.pvp.target?.username} ${rateIntValue(36,(bot.pvp.target?.metadata[7]+bot.pvp.target?.metadata[11]))} ${isInCylinder(targetPos,cylinder1) || isInCylinder(targetPos,cylinder2) ? status.good+'true{/}' : status.bad+'false{/}'} ` +
   `DIST ${rateIntValue(10,bot.pvp.target?.position.distanceTo(bot.entity.position))} ${bot.pvp.followRange}\n` +
-  `DELTAHEALTH ${rateIntValue(5,deltaHealth)} ` +
+  `DHEALTH ${rateIntValue(5,deltaHealth)} ` +
   // INVENTORY
   `PEARL ${rateIntValue(32,getItemCount('ender_pearl'))} BUFF ${rateIntValue(5,getItemCount('potion'))} TOTEM ${rateIntValue(8,getItemCount('totem_of_undying'))} GAPPLE ${rateIntValue(64,getItemCount('golden_apple'))} ` + 
   `ARMOR ${rateIntValue(6,getItemCount('diamond_helmet'))}|${rateIntValue(6,getItemCount('diamond_chestplate'))}|${rateIntValue(6,getItemCount('diamond_leggings'))}|${rateIntValue(6,getItemCount('diamond_boots'))} ` +
@@ -1039,9 +1125,10 @@ setInterval(() => {
   `HIT ${cooldown['hit']?.lock ? status.bad+(cooldown['hit']?.time ?? 0).toFixed(2) : status.good+(cooldown['hit']?.time ?? 0).toFixed(2)}{/} PVP ${cooldown['pvp']?.lock ? status.bad+(cooldown['pvp']?.time ?? 0).toFixed(2) : status.good+(cooldown['pvp']?.time ?? 0).toFixed(2)}{/} BUFF ${cooldown['buff']?.lock ? status.bad+(cooldown['buff']?.time ?? 0).toFixed(2) : status.good+(cooldown['buff']?.time ?? 0).toFixed(2)}{/} GAPPLE ${cooldown['gapple']?.lock ? status.bad+(cooldown['gapple']?.time ?? 0).toFixed(2) : status.good+(cooldown['gapple']?.time ?? 0).toFixed(2)}{/} PEARL ${cooldown['pearl']?.lock ? status.bad+(cooldown['pearl']?.time ?? 0).toFixed(2) : status.good+(cooldown['pearl']?.time ?? 0).toFixed(2)}{/} ` +
   `HAND ${rateBoolValue(lockValue['hand'],true)} OFF-HAND ${rateBoolValue(lockValue['off-hand'],true)}\n` +
   `HSR ${rateIntValue(100,((pvpHitSuccess/pvpHitAttempts)*100))} ` +
-  `JESUS RDY ${rateBoolValue(isJesusReady)} STBY ${rateBoolValue(isJesusing)} ` + 
+  `JESUS RDY ${rateBoolValue(isInLiquid)} STBY ${rateBoolValue(isJesusing)} ` + 
   `STRAFE RDY ${rateBoolValue(bot.entity.onGround)} ` + 
-  `CONTROL ${rateBoolValue(bot.getControlState('forward'))} ${rateBoolValue(bot.getControlState('back'))} ${rateBoolValue(bot.getControlState('left'))} ${rateBoolValue(bot.getControlState('right'))} ${rateBoolValue(bot.getControlState('sprint'))} ${rateBoolValue(bot.getControlState('jump'))} `
+  `PREVENT ${rateBoolValue(isPreventing)} ` +
+  `CONTROL ${rateBoolValue(bot.getControlState('forward'))} ${rateBoolValue(bot.getControlState('sprint'))} ${rateBoolValue(bot.getControlState('jump'))} `
   renderFunctionBox(banner);
 }, 100);
 /*
@@ -1053,8 +1140,8 @@ bot.on('windowOpen', async (window) => {
   await window.close();
 });
 bot.on('path_reset', async (path) => {
-  renderChatBox(`${status.verbose}PATH RESET ${util.inspect(path)}`)
   if (path === 'stuck') {
+    renderChatBox(`${status.warn}PATH RESET ${util.inspect(path)}`)
     if (isJesusing) {
       renderChatBox(`${status.warn}Bot stuck! Attempting to unstuck...`);
       isHunting = false;
@@ -1087,8 +1174,10 @@ bot.on('entityHurt', (entity) => {
   }
 });
 bot.on('particle', (particle) => {
-  if (particle.id === 45 && Math.ceil(particle.position.y) === Math.ceil(bot.entity.position.y)) {
-    renderChatBox(`${status.debug}CRITICAL HIT FROM BOT ${util.inspect(particle)}`);
+  const floorParticle = floorVec3(particle.position);
+  const floorBot = floorVec3(bot.entity.position);
+  if (particle.id === 45 && floorParticle.x === floorBot.x && floorParticle.y === floorBot.y && floorParticle.z === floorBot.z) {
+    renderChatBox(`${status.debug}CRITICAL HIT FROM BOT ${util.inspect(particle)}\n${status.debug}${bot.entity.position}`);
   }
 })
 bot.on('death', async() => {
@@ -1100,9 +1189,9 @@ bot.on('death', async() => {
   const zone = Math.floor(Math.random() * zoneArray.length);
   if (combatMode === 2) bot.chat(`/warp play${zoneArray[zone]}`); else bot.chat(`/home home`);
 });
-bot.on('error', (err) => logError(err));
-process.on('uncaughtException', (err) => logError(err));
-process.on('warning', (err) => logError(err));
+bot.on('error', (err) => renderError(err));
+process.on('uncaughtException', (err) => renderError(err));
+process.on('warning', (err) => renderError(err));
 
 screen.key(['C-z'], () => logBox.focus());
 screen.key(['C-x'], () => chatBox.focus());
@@ -1114,19 +1203,19 @@ screen.key(['escape'], () => {
   bot.end();
   process.exit(0);
 });
-inputBox.key(['tab'], async () => {
+
+async function getTabComplete() {
   const inputWords = inputBox.getValue().trim().split(' ');
   const lastWord = inputWords[inputWords.length - 1];
-
   const newTabComplete = await bot.tabComplete(lastWord,false,false,1000);
 
   if (newTabComplete.length > 1) {
     tabComplete = newTabComplete;
-    renderChatBox(`${status.ok}Tab-complete has ${tabComplete.length} entries\n"${tabComplete}"`);
+    renderChatBox(`${status.info}Tab-complete has ${tabComplete.length} entries\n"${tabComplete}."`);
   }
   if (tabComplete) {
     const entry = tabComplete[tabCompleteIndex % tabComplete.length];
-    renderChatBox(`${status.ok}Setting entry ${entry} which is ${tabCompleteIndex+1} out of ${tabComplete.length} total entries`);
+    renderChatBox(`${status.ok}Entry ${entry} chosen, ${tabCompleteIndex+1} out of ${tabComplete.length} total entries.`);
 
     inputWords[inputWords.length - 1] = entry;
     inputBox.setValue(inputWords.join(' '));
@@ -1135,4 +1224,5 @@ inputBox.key(['tab'], async () => {
   } else {
     renderChatBox(`${status.warn}No tab-completions available.`);
   }
-});
+}
+inputBox.key(['tab'], () => getTabComplete());
