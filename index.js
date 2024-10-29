@@ -80,6 +80,8 @@ let isChatEnabled = true;
 let botWebBlock;
 let entityWebBlock;
 
+let lockLobby = false;
+
 const cylinder1 = {
   center: [2190.5, 0, 1003.5],
   radius: 39.8,
@@ -138,8 +140,8 @@ bot.once('inject_allowed', () => {
   bot.loadPlugin(pvp);
   bloodhoundPlugin(bot);
 
-  bot.physics.yawSpeed = 10*10^5;
-
+  bot.physics.yawSpeed = 10*10^3;
+  bot.physics.pitchSpeed = 10*10^3;
   bot.pathfinder.thinkTimeout = 5000;
   bot.pathfinder.tickTimeout = 40;
 
@@ -161,15 +163,61 @@ bot.once('inject_allowed', () => {
   bot.pvp.followRange = 2;
   //bot.pvp.meleeAttackRate = new pvpLibrary.RandomTicks(10,11);
 
-  bot.pvp.viewDistance = 256;
-  bot.pvp.movements.blocksToAvoid = new Set();
-  bot.pvp.movements.blocksToAvoid.add(30);
-  bot.pvp.movements.emptyBlocks.delete(30);
+  bot.pvp.viewDistance = 128;
+  //bot.pvp.movements.blocksToAvoid = new Set();
+  //bot.pvp.movements.blocksToAvoid.delete(30);
+  //bot.pvp.movements.emptyBlocks.delete(30);
 });
 /*
-  SERVER CHAT COMMANDS (AUTOMATED)
+  FUNCTIONS: COMMAND HANDLING
 */
-async function onMessage(data) {
+async function getTabComplete() {
+  const inputWords = inputBox.getValue().trim().split(' ');
+  const lastWord = inputWords[inputWords.length - 1];
+  const newTabComplete = await bot.tabComplete(lastWord,false,false,1000);
+
+  if (newTabComplete.length > 1) {
+    tabComplete = newTabComplete;
+    renderChatBox(`${status.info}Tab-complete has ${tabComplete.length} entries\n"${tabComplete}."`);
+  }
+  if (tabComplete) {
+    const entry = tabComplete[tabCompleteIndex % tabComplete.length];
+    renderChatBox(`${status.ok}Entry ${entry} chosen, ${tabCompleteIndex+1} out of ${tabComplete.length} total entries.`);
+
+    inputWords[inputWords.length - 1] = entry;
+    inputBox.setValue(inputWords.join(' '));
+    tabCompleteIndex++;
+    if (tabCompleteIndex >= tabComplete.length) tabCompleteIndex = 0;
+  } else {
+    renderChatBox(`${status.warn}No tab-completions available.`);
+  }
+}
+
+/*
+let trapdoor = bot.registry.blocksByName['oak_trapdoor'].id
+let block = bot.findBlock({ trapdoor })
+use for equipItem !!!! rewrite!!
+*/
+async function logAbnormalities(data) {
+  const filteredMessages = [
+    /^\[❤\] Иди к порталам, и выбери сервер для игры, либо воспользуйся компасом\.$/,
+    /^\[Внимание\] АКЦИЯ! Неделя супер скидок! Успей купить выгодно:\) Покупать тут - https:\/\/MineLegacy\.ru $/
+  ];
+  /* Wrote this because the server admin occasionally leaks IPs of players */
+  if (lockLobby && !filteredMessages.some(regex => regex.test(data))) {
+    renderChatBox(`${status.warn}${status.warn}ABNORMALITY FOUND!, logging to file...`);
+    renderChatBox(`AB>>${data}<<AB`);
+    fs.appendFile('DO_NOT_DELETE_abnormal.log', data + new Date().toLocaleString() + '\n', (err) => {
+      if (err) {
+        renderChatBox(`${status.error}${data} failed to append`);
+        renderError(err);
+      } else {
+        renderChatBox(`${status.ok}${data} was appended to file`);
+      }
+    });
+  }
+}
+async function chatCommands(data) {
   const filteredMessages = [
     /^Режим PVP, не выходите из игры \d+ секунд.*\.$/,
     /^\s*$/,
@@ -177,6 +225,7 @@ async function onMessage(data) {
   ];
   if (isChatEnabled && !filteredMessages.some(regex => regex.test(data))) renderChatBox(`>>>${data.toAnsi()}<<<`);
   switch(true) {
+    /* CHAT*/
     case /^.+Ⓖ.+MILITECH Patr10t . .+$/.test(data): {
       const regex = /[^➯]+$/;
       const match = regex.exec(data.toString());
@@ -193,16 +242,61 @@ async function onMessage(data) {
       bot.chat(value);
     }
     break;
+    /* LOGIN */
+    case data == '[❤] Иди к порталам, и выбери сервер для игры, либо воспользуйся компасом.':
+      if (lockLobby) {
+        isWindowLocked = true;
+        isAutoEquipping = false;
+        const redstone = bot.inventory.findInventoryItem(bot.registry.itemsByName.redstone.id, null);
+        if (Object.keys(bot.players).length === 1 && redstone) {
+          renderChatBox(`${status.warn}Player list length is ${Object.keys(bot.players).length}, viewing players if not enabled, enabling...`);
+          await equipItem(redstone.type, 'hand');
+          await bot.waitForTicks(5);
+          bot.activateItem();
+        }
+        return;
+      } else isAutoEquipping = true;
+      isWindowLocked = false;
+      renderChatBox(`${status.ok}isWindowLocked? ${isWindowLocked}`);
+      bot.setQuickBarSlot(0);
+      bot.activateItem();
+    break;
+    case /^\s{43}$/.test(data):
+      if (lockLobby) {
+        isWindowLocked = true;
+        isAutoEquipping = false;
+        return;
+      }else isAutoEquipping = true;
+      isWindowLocked = true;
+      renderChatBox(`${status.ok}isWindowLocked? ${isWindowLocked}`);
+    break;
     case /^Вы были телепортированы в Lobby.+$/.test(data):
+      if (lockLobby) {
+        isWindowLocked = true;
+        isAutoEquipping = false;
+        return;
+      }
       isWindowLocked = false;
       renderChatBox(`${status.info}isWindowLocked? ${isWindowLocked}`);
       await bot.waitForTicks(5);
       bot.setQuickBarSlot(0);
       bot.activateItem();
     break;
+    /* MISC */
     case /^Установлен режим полета включен для .+$/.test(data): 
       bot.chat(`/fly`);
     break;
+    case data == 'Телепортирование...': {
+      await bot.waitForChunksToLoad();
+      await bot.waitForTicks(2);
+      const entity = bot.nearestEntity(e => e.type === 'player' && e.position.distanceTo(bot.entity.position) < 1);
+      if (entity) {
+        renderChatBox(`${status.warn}${entity.username} teleported me!`);
+        bot.chat(`!${entity.username} телепортировал меня`);
+      }
+    }
+    break;
+    /* PvP */
     case /^\[MineLegacy\] Вы убили игрока .+, и получили за это \$\d+\.\d+\. Нанесённый урон: \d+\.\d\/\d+\.\d$/.test(data): {
       let insults = ["БЫЛ ПОПУЩЕН",
         "БЫЛ ПРИХЛОПНУТ ТАПКОМ",
@@ -225,31 +319,11 @@ async function onMessage(data) {
         "ИЗИ БОТЯРА",
         "ЗЕМЛЯ ТЕБЕ СТЕКЛОВАТОЙ"];
       const randomIndex = Math.floor(Math.random() * insults.length);
+      renderChatBox(`${status.pvp}Taunting player ${bot.pvp.target.username}`);
       bot.chat(`!${bot.pvp.target.username} ${insults[randomIndex]}`);
     }
     break;
     case /^\[MineLegacy\] Вы были убиты игроком .+, и потеряли \$\d+\.\d+\.$/.test(data):
-      //
-    break;
-    case data == 'Телепортирование...': {
-      await bot.waitForChunksToLoad();
-      await bot.waitForTicks(2);
-      const entity = bot.nearestEntity(e => e.type === 'player' && e.position.distanceTo(bot.entity.position) < 1);
-      if (entity) {
-        renderChatBox(`${status.warn}${entity.username} teleported me!`);
-        bot.chat(`!${entity.username} телепортировал меня`);
-      }
-    }
-    break;
-    case data == '[❤] Иди к порталам, и выбери сервер для игры, либо воспользуйся компасом.':
-      isWindowLocked = false;
-      renderChatBox(`${status.ok}isWindowLocked? ${isWindowLocked}`);
-      bot.setQuickBarSlot(0);
-      bot.activateItem();
-    break;
-    case /^\s{43}$/.test(data):
-      isWindowLocked = true;
-      renderChatBox(`${status.ok}isWindowLocked? ${isWindowLocked}`);
     break;
     case /^Вы сможете использовать золотое яблоко через \d+ секунд.*\.$/.test(data): {
       const regex = /\d+/;
@@ -281,32 +355,28 @@ async function onMessage(data) {
       cooldown['pvp'].lock = false;
     break;
     case data == '[!] Извините, но Вы не можете PvP здесь.':
+      if (noPvPCountdownLock) return;
       strikeValue['pvp']++;
-      if (noPvPCountdownLock) return; 
-      while(strikeValue['pvp'] > 0) {
+      while (strikeValue['pvp'] > 0) {
         noPvPCountdownLock = true;
         strikeValue['pvp']--;
-        await bot.waitForTicks(20);
         if (strikeValue['pvp'] >= 3) {
-          resetCombatVariables();
+          resetCombat();
           isHunting = false;
           strikeValue['pvp'] = 0;
-          noPvPCountdownLock = false;
-          renderChatBox(`${status.pvp}${status.info}Cant PvP here, stopping`);
+          renderChatBox(`${status.pvp}${status.info}Can't PvP here, stopping`);
+          break;
         }
+        await bot.waitForTicks(20);
       }
-      noPvPCountdownLock = false
+      noPvPCountdownLock = false;
     break;
   }
 }
-bot.on('message', async (data) => onMessage(data)); 
-/*
-  CLI COMMANDS
-*/
-inputBox.on('submit', async (data) => {
+async function cliCommands(data) {
   const command = data.split(' ');
   switch(true) {
-    // TOSS
+    /* TOSS ITEMS */
     case /^ts \d+ \d+$/.test(data):
       tossItem(command[2], command[1]);
     break;
@@ -316,41 +386,49 @@ inputBox.on('submit', async (data) => {
     case /^tsall$/.test(data):
       tossAllItems();
     break;
-    // EQUIP
+    /* EQUIP ITEMS */
     case /^eq [\w-]+ \d+$/.test(data):
       equipItem(command[2], command[1]);
     break;
-    case /^sweq$/.test(data):
-      isAutoEquipping = !isAutoEquipping;
-      renderChatBox(`${status.ok}isAutoEquipping set to ${isAutoEquipping}`);
-    break;
-    // UNEQUIP
+    /* UNEQIUP ITEMS */
     case /^uneq [\w-]+$/.test(data):
       unequipItem(command[1]);
     break;
     case /^uneqall$/.test(data): 
       unequipAllItems();
     break;
-    // RESET/CHANGE MODE
-    case /^s$/.test(data):
-      resetCombatVariables();
+    /* CHANGE MODE */
+    case /^sweq$/.test(data):
+      isAutoEquipping = !isAutoEquipping;
+      renderChatBox(`${status.ok}isAutoEquipping set to ${isAutoEquipping}`);
     break;
     case /^cm(\s[0-4])?$/.test(data):
-      if (command[1]) {
-        combatMode = parseInt(command[1], 10);
-      } else {
-        combatMode++;
-        if (combatMode > 3) combatMode = 0;
-      }
+      combatMode = command[1] ? parseInt(command[1], 10) : (combatMode + 1) % 4;
       renderChatBox(`${status.ok}combatMode set to ${combatMode}`);
     break;
-    // ENABLE COMBAT
+    case /^ec$/.test(data):
+      isChatEnabled = !isChatEnabled;
+      renderChatBox(`${status.ok}isChatEnabled set to ${isChatEnabled}`);
+    break;
+    case /^l$/.test(data):
+      renderChatBox(`${status.ok}isLogging set to ${!isLogging}`);
+      isLogging = !isLogging;
+      renderChatBox(`${status.ok}isLogging set to ${isLogging}`);
+    break;
+    case /^ll$/.test(data):
+      lockLobby = !lockLobby
+      renderChatBox(`${status.ok}lockLobby set to ${lockLobby}`)
+    break;
+    /* ENABLE/DISABLE COMBAT */
     case /^g$/.test(data):
       isHunting = !isHunting;
-      if (!isHunting) resetCombatVariables();
+      if (!isHunting) resetCombat();
       renderChatBox(`${status.ok}isHunting set to ${isHunting}`);
     break;
-    // ALLY ADD/REMOVE
+    case /^s$/.test(data):
+      resetCombat();
+    break;
+    /* ALLY ADD/REMOVE */
     case /^aa \S+$/.test(data):
       allies.push(command[1]);
       renderChatBox(`${status.ok}Added ally ${command[1]}`);
@@ -359,16 +437,16 @@ inputBox.on('submit', async (data) => {
       allies = allies.filter(item => item !== command[1]);
       renderChatBox(`${status.ok}Removed ally ${command[1]}`);
     break;
-    // RESTORE LOADOUT
+    case /^raa$/.test(data):
+      allies = [master, bot.username];
+      renderChatBox(`${status.ok}Removed all allies`)
+    break;
+    /* RESTORE LOADOUT */
     case /^rep$/.test(data):
-      replenishLoadout();
+      restoreLoadout();
     break;
-    case /^ec$/.test(data):
-      isChatEnabled = !isChatEnabled;
-      renderChatBox(`${status.ok}isChatEnabled set to ${isChatEnabled}`);
-    break;
+
     // DEBUG
-        // JSON/NBT DATA DEBUG
     case /^test$/.test(data): {
       const datablock = [
       util.inspect(bot.players['Patr10t'], { depth: null, colors: false }),
@@ -386,17 +464,14 @@ inputBox.on('submit', async (data) => {
       } else renderChatBox(`${status.warn}No cobwebs found`);
     }
     break;
-    case /^l$/.test(data):
-      renderChatBox(`${status.ok}isLogging set to ${!isLogging}`);
-      isLogging = !isLogging;
-      renderChatBox(`${status.ok}isLogging set to ${isLogging}`);
-    break;
+    /* LIST ELEMENTS */
     case /^i$/.test(data):
-      renderChatBox(getItems());
+      getItems();
     break;
     case /^p$/.test(data):
-      getPlayers()
+      getPlayers();
     break;
+    /* QUIT */
     case /^q$/.test(data):
       bot.end();
       process.exit(0);
@@ -407,44 +482,48 @@ inputBox.on('submit', async (data) => {
     return;
   }
   inputBox.setValue('');
-});
+}
 /*
-  FUNCTIONS: CALCULATIONS
+  FUNCTIONS: TIMERS
 */
 async function handleCooldown(value, type) {
-  if (value > 0) {
-    if (type != 'pvp') renderChatBox(`${status[type]}${status.info}Cooldown for ${type} started, ${value}s left`);
-    cooldown[type].time = value;
-  } else if (value <= 0) cooldown[type].time = 0.99; else return;
+  cooldown[type].time = value > 0 ? value : cooldown[type].time + 0.99;
+  if (type != 'pvp') renderChatBox(`${status[type]}${status.info}Cooldown for ${type} started, ${cooldown[type].time}s left`);
+
   cooldown[type].time = parseInt(cooldown[type].time, 10);
+  
   if (!cooldown[type].lock) {
+    cooldown[type].lock = true;
     while (cooldown[type].time > 0) {
-      cooldown[type].lock = true;
       cooldown[type].time -= 0.1;
       await bot.waitForTicks(2);
     }
   }
+  
   if (cooldown[type].time <= 0 && cooldown[type].lock === true){
     cooldown[type].time = 0;
     cooldown[type].lock = false;
     renderChatBox(`${status[type]}${status.info}Cooldown for ${type} ended, [TIME: ${cooldown[type].time} LOCK: ${cooldown[type].lock}]`);
   }
 }
+/*
+  FUNCTIONS: CALCULATIONS
+*/
 function isInCylinder([px, py, pz], { center: [cx, cy, cz], radius, height }) {
   const withinHeight = py >= cy && py <= cy + height;
   const withinRadius = (px - cx) ** 2 + (pz - cz) ** 2 <= radius ** 2;
   return withinHeight && withinRadius;
 }
-function getStrafeVectors(position, angleDegrees, speed) {
+function getStrafeVelocity(position, angleDegrees, speed) {
   const [targetX, targetZ] = position;
   const dx = targetX - bot.entity.position.x;
   const dz = targetZ - bot.entity.position.z;
   const length = Math.hypot(dx, dz) || 999;
   const angle = angleDegrees * (Math.PI / 180);
+  if (length === 999) return [Math.random() * 20 - 10, Math.random() * 20 - 10];
   const cosA = Math.cos(angle), sinA = Math.sin(angle);
-  const velocityX = (dx / length * cosA - dz / length * sinA) * speed;
-  const velocityZ = (dx / length * sinA + dz / length * cosA) * speed;
-  if (length === 999) return [Math.random() * (-10 - 10) + 10, Math.random() * (-10 - 10) + 10];
+  const velocityX = ((dx / length) * cosA - (dz / length) * sinA) * speed;
+  const velocityZ = ((dx / length) * sinA + (dz / length) * cosA) * speed;
   return [velocityX, velocityZ];
 }
 function getPearlTrajectory(distance) {
@@ -453,6 +532,7 @@ function getPearlTrajectory(distance) {
   if (Math.abs(sineTheta) > 1) throw new Error(`${status.error}Distance too far for initial velocity.`);
   return distance * Math.sin(0.5 * Math.asin(sineTheta));
 }
+//
 function rateIntValue(max, current, reverse) {
   const percentage = (parseInt(current, 10) / parseInt(max, 10)) * 100;
   const roundedCurrent = Math.round(current);
@@ -465,7 +545,9 @@ function rateBoolValue(current, reverse) {
   const statusType = reverse ? (current ? "bad" : "good") : (current ? "good" : "bad");
   return `${status[statusType]}${current}{/}`;
 }
+//
 const adjustVelocity = (value, boundary) => Math.max(-boundary, Math.min(value, boundary));
+//
 function floorVec3(vec3) {
   return {
       x: Math.floor(vec3.x),
@@ -524,15 +606,37 @@ function updateWebBlocks() {
 /*
   FUNCTIONS: PHYSICS
 */
+function resetVelocity() {
+  if ((isInLiquid || isJesusing) && !bot.pathfinder.isMoving()) {
+    // retard mode but works?
+    renderChatBox(`${status.verbose}RESET vel`)
+    bot.entity.velocity.set(0,-0.08,0);
+    bot.entity.velocity.set(0,-0.08,0);
+  }
+}
+async function unstuck(path) {
+  if (path === 'stuck' && (isInLiquid || isJesusing || bot.entity.isInWeb)) {
+    renderChatBox(`${status.warn}Bot stuck! Waiting 10 ticks to unstuck`);
+    isHunting = false;
+    resetCombat();
+    bot.clearControlStates();
+    bot.entity.velocity.set(0,0,0);
+    await bot.waitForTicks(10);
+    isHunting = true;
+  }
+}
 function jesusOnLiquid() {
   const liquidBelow = bot.blockAt(bot.entity.position.offset(0, -0.2, 0));
-  isInLiquid = (liquidBelow && (liquidBelow.name === 'water' || liquidBelow.name === 'lava'));
+  isInLiquid = (liquidBelow && (liquidBelow.name === 'water' || liquidBelow.name === 'lava') || (bot.entity.isInWater || bot.entity.isInLava));
 
   const liquidBoundary = bot.blockAt(bot.entity.position.offset(0, -0.001, 0));
   if (bot.entity.isInWater || bot.entity.isInLava || liquidBoundary.name === 'water' || liquidBoundary.name === 'lava') {
     isJesusing = true;
+    //renderChatBox(bot.entity.position)
     bot.entity.velocity.set(bot.entity.velocity.x,0.11,bot.entity.velocity.z);
-    if (bot.getControlState('jump')) bot.setControlState('jump', false);
+
+    bot.setControlState('jump', false);
+    //bot.setControlState('sprint', false);
   } else {
     isJesusing = false;
   }
@@ -543,7 +647,7 @@ function strafeMovement() {
 
   const entityCloseToWebBlock = entityWebBlock[0] && entityWebBlock[0].distanceTo(entity.position) <= 1.5;
   const botCloseToWebBlock = botWebBlock[0] && botWebBlock[0].distanceTo(bot.entity.position) < 1.1;
-  bot.pvp.followRange = (entityCloseToWebBlock || botCloseToWebBlock || isInLiquid || bot.entity.isInWater || bot.entity.isInLava || isPreventing) ? 2 : 5;
+  bot.pvp.followRange = (entityCloseToWebBlock || botCloseToWebBlock) ? 2 : 5;
 
   if (!isInLiquid && bot.entity.onGround && bot.entity.position.distanceTo(entity.position) <= bot.pvp.followRange && bot.pvp.followRange === 5) {
     if (!entityWebBlock[0]) {
@@ -557,40 +661,9 @@ function strafeMovement() {
     }
   }
 }
-
-async function preventWeb() {
-  if (botWebBlock.length > 0) {
-    let pos1 = botWebBlock[0];
-    let pos2 = botWebBlock.length > 1 ? botWebBlock[1] : botWebBlock[0];
-
-    const botPosClone = bot.entity.position.clone();
-    const deltaPos = bot.entity.position.y - floorVec3(botPosClone).y;
-
-    pos1.y += deltaPos;
-    pos2.y += deltaPos;
-
-    if (pos1.distanceTo(bot.entity.position) <= 0.97 || pos2.distanceTo(bot.entity.position) <= 0.97) {
-      isPreventing = true;
-      const webPos = botWebBlock.length > 1 
-        ? getMidpoint(pos1, pos2)
-        : pos1;
-      const [velocityX, velocityZ] = getStrafeVectors([webPos.x, webPos.z], 180, 1);
-      
-      renderChatBox(`${status.debug}Web found at X: ${webPos.x} Z: ${webPos.z}, using velocity method XV: ${adjustVelocity(velocityX, 0.11)} ZV: ${adjustVelocity(velocityZ, 0.11)}`);
-      bot.entity.velocity.set(
-        bot.entity.velocity.x + adjustVelocity(velocityX, 0.11),
-        bot.entity.velocity.y,
-        bot.entity.velocity.z + adjustVelocity(velocityZ, 0.11)
-      );
-    } else {
-      isPreventing = false;
-    }
-  } else {
-    isPreventing = false;
-  }
-}
+// Вы были телепортированы в Lobby. Причина: Timed out
 function strafe(position,angleDegrees,speed) {
-  const [velocityX,velocityZ] = getStrafeVectors(position,angleDegrees,speed);
+  const [velocityX,velocityZ] = getStrafeVelocity(position,angleDegrees,speed);
   if (bot.entity.onGround && !isJesusing && !isInLiquid) {
     bot.entity.velocity.set(velocityX,0.42,velocityZ);
     bot.setControlState('forward', false);
@@ -644,7 +717,6 @@ function formatCell(cell, index, type, columnWidths) {
     }
   }
 }
-
 function renderChatBox(text) {
   if (!isLogging) return;
   chatBox.log(`${text}{|}{gray-fg}${new Date().toLocaleString()}{/} `);
@@ -768,7 +840,7 @@ function getItemCount(itemId) {
 /*
   FUNCTIONS: RESET
 */
-function resetCombatVariables() {
+function resetCombat() {
   bot.pvp.forceStop();
   bot.pathfinder.setGoal(null);
   renderChatBox(`${status.ok}resetCombatVariables completed`);
@@ -777,7 +849,7 @@ function resetCombatVariables() {
   FUNCTIONS: COMBAT INVENTORY MANAGMENT
 */
 async function equipArmor() {
-  const armorPieces = [ // REWRITE USING .enchants !!!!
+  const armorPieces = [
     { destination: 'head', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_helmet.id, null), minEnch: 8 },
     { destination: 'torso', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_chestplate.id, null), minEnch: 6 },
     { destination: 'legs', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_leggings.id, null), minEnch: 6 },
@@ -913,6 +985,7 @@ async function tossPearl() {
       }
       lockValue['off-hand'] = true;
       isHunting = false;
+      resetCombat();
       const angleInBlocks = getPearlTrajectory(entity.position.distanceTo(bot.entity.position));
       const oldItemCount = getItemCount('ender_pearl');
       renderChatBox(`${status.pearl}${status.info}Pearl STARTED`);
@@ -996,7 +1069,7 @@ async function tossJunk() {
 /*
   FUNCTIONS: RESTORE LOADOUT
 */
-async function replenishLoadout() {
+async function restoreLoadout() {
   const data = fs.readFileSync('./inventory-nbt.conf', 'utf8');
   const lines = data.split('\n');
 
@@ -1057,14 +1130,10 @@ function huntPlayer() {
   })();
   const entity = bot.nearestEntity(filterEntity);
   if (entity) { 
-    bot.pvp.attack(entity);
-
-    if(isInLiquid) {
-      if (!bot.getControlState('forward')) {
-        bot.setControlState('forward', true);
-      }
+    if ((isInLiquid || isJesusing) && !bot.pathfinder.isMoving()) {
+      renderChatBox(`${status.debug} ${isInLiquid || isJesusing} ${bot.pathfinder.isMoving()}`);
+      bot.setControlState('forward', true);
     }
-
     if (entity.position.distanceTo(bot.entity.position) <= bot.pvp.attackRange) {
       if (entity.elytraFlying) {
         bot.lookAt(entity.position.offset(0,0,0), true);
@@ -1072,6 +1141,8 @@ function huntPlayer() {
         bot.lookAt(entity.position.offset(0,0.8,0), true);
       }
     }
+    bot.pvp.attack(entity);
+    // if in  x seconds delta position less than 1-2 blocks: reset velocity
   } else { 
     bot.pvp.forceStop();
   }
@@ -1081,6 +1152,8 @@ function huntPlayer() {
 */
 bot.on('physicsTick', async () => {
   if (!isWindowLocked || !isAutoEquipping) return;
+  jesusOnLiquid();
+  if (bot.entity.isInWeb) bot.setControlState('jump', false);
   // HIGHEST PRIORITY
   if (strikeValue['armor'] < 2) equipArmor(); // MAIN HAND
   if (cooldown['gapple'].time === 0 && !cooldown['gapple'].lock && strikeValue['gapple'] < 2) equipGapple(); // OFFHAND
@@ -1095,15 +1168,17 @@ bot.on('physicsTick', async () => {
     if (cooldown['pvp'].time === 0 && strikeValue['junk'] < 2) tossJunk(); // MAIN HAND
   }
   // LOW PRIORITY
+  if (bot.pvp.target) strafeMovement();
+  if (isHunting) huntPlayer();
 });
 setInterval(() => {
   if (!isWindowLocked || !isAutoEquipping) return;
   updateWebBlocks();
-  jesusOnLiquid();
-  preventWeb();
-  if (bot.pvp.target) strafeMovement();
-  if (isHunting) huntPlayer();
-}, 150);
+}, 500);
+setInterval(() => {
+  if (!isWindowLocked || !isAutoEquipping) return;
+  resetVelocity();
+}, 1500);
 setInterval(() => {
   if (!isWindowLocked) return;
   const helmetPerc = (((363 - bot.inventory.slots[5]?.durabilityUsed) / 363) * 100);
@@ -1130,27 +1205,19 @@ setInterval(() => {
   `PREVENT ${rateBoolValue(isPreventing)} ` +
   `CONTROL ${rateBoolValue(bot.getControlState('forward'))} ${rateBoolValue(bot.getControlState('sprint'))} ${rateBoolValue(bot.getControlState('jump'))} `
   renderFunctionBox(banner);
-}, 100);
+}, 50);
 /*
   bot.on() EVENT TRIGGERS
-*/
+*/ // Sheikh ??????? IP selfharm ('37.214.23.240') ?? 'osn na nacionalnoi po4ve'.
+inputBox.on('submit', async (data) => cliCommands(data));
+bot.on('messagestr', (data) => logAbnormalities(data));
+bot.on('message', async (data) => chatCommands(data)); 
 bot.on('windowOpen', async (window) => {
   if (isWindowLocked) return;
   await bot.clickWindow(0,0,0);
   await window.close();
 });
-bot.on('path_reset', async (path) => {
-  if (path === 'stuck') {
-    renderChatBox(`${status.warn}PATH RESET ${util.inspect(path)}`)
-    if (isJesusing) {
-      renderChatBox(`${status.warn}Bot stuck! Attempting to unstuck...`);
-      isHunting = false;
-      resetCombatVariables();
-      await bot.waitForTicks(10);
-      isHunting = true;
-    }
-  }
-});
+bot.on('path_reset', (path) => unstuck(path));
 bot.on('scoreRemoved', () => {
   if (cooldown['pvp'].lock || !bot.players[master]) return;
   const dynamicKeyRegex = /^\s*.*Денег:.*\$$/;
@@ -1182,16 +1249,13 @@ bot.on('particle', (particle) => {
 })
 bot.on('death', async() => {
   renderChatBox(`${status.info}${bot.username} has died, waiting for ${Math.ceil((cooldown['pvp'].time ?? 1) *20)} ticks`);
-  resetCombatVariables();
+  resetCombat();
   await bot.waitForTicks(Math.ceil((cooldown['pvp'].time ?? 1)*20 + 5));
-  await replenishLoadout();
+  await restoreLoadout();
   const zoneArray = ['',2,4];
   const zone = Math.floor(Math.random() * zoneArray.length);
   if (combatMode === 2) bot.chat(`/warp play${zoneArray[zone]}`); else bot.chat(`/home home`);
 });
-bot.on('error', (err) => renderError(err));
-process.on('uncaughtException', (err) => renderError(err));
-process.on('warning', (err) => renderError(err));
 
 screen.key(['C-z'], () => logBox.focus());
 screen.key(['C-x'], () => chatBox.focus());
@@ -1203,26 +1267,7 @@ screen.key(['escape'], () => {
   bot.end();
   process.exit(0);
 });
-
-async function getTabComplete() {
-  const inputWords = inputBox.getValue().trim().split(' ');
-  const lastWord = inputWords[inputWords.length - 1];
-  const newTabComplete = await bot.tabComplete(lastWord,false,false,1000);
-
-  if (newTabComplete.length > 1) {
-    tabComplete = newTabComplete;
-    renderChatBox(`${status.info}Tab-complete has ${tabComplete.length} entries\n"${tabComplete}."`);
-  }
-  if (tabComplete) {
-    const entry = tabComplete[tabCompleteIndex % tabComplete.length];
-    renderChatBox(`${status.ok}Entry ${entry} chosen, ${tabCompleteIndex+1} out of ${tabComplete.length} total entries.`);
-
-    inputWords[inputWords.length - 1] = entry;
-    inputBox.setValue(inputWords.join(' '));
-    tabCompleteIndex++;
-    if (tabCompleteIndex >= tabComplete.length) tabCompleteIndex = 0;
-  } else {
-    renderChatBox(`${status.warn}No tab-completions available.`);
-  }
-}
 inputBox.key(['tab'], () => getTabComplete());
+bot.on('error', (err) => renderError(err));
+process.on('uncaughtException', (err) => renderError(err));
+process.on('warning', (err) => renderError(err));
