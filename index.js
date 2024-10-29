@@ -84,7 +84,7 @@ let lockLobby = false;
 
 const cylinder1 = {
   center: [2190.5, 0, 1003.5],
-  radius: 39.8,
+  radius: 39.85,
   height: 255
 };
 const cylinder2 = {
@@ -115,7 +115,7 @@ const cooldownTypes = ['pvp','gapple','pearl','buff','hit']
 for (const type of cooldownTypes) cooldown[type] = {time: 0, lock: false};
 
 const lockValue = {};
-const lockValueTypes = ['hand','off-hand','isEquippingHead','isEquippingTorso','isEquippingLegs','isEquippingFeet'];
+const lockValueTypes = ['hand','off-hand','passive','gapple','totem','armor','buff','pearl','junk'];
 for (const type of lockValueTypes) lockValue[type] = false;
 
 const strikeValue = {};
@@ -192,7 +192,6 @@ async function getTabComplete() {
     renderChatBox(`${status.warn}No tab-completions available.`);
   }
 }
-
 /*
 let trapdoor = bot.registry.blocksByName['oak_trapdoor'].id
 let block = bot.findBlock({ trapdoor })
@@ -225,23 +224,6 @@ async function chatCommands(data) {
   ];
   if (isChatEnabled && !filteredMessages.some(regex => regex.test(data))) renderChatBox(`>>>${data.toAnsi()}<<<`);
   switch(true) {
-    /* CHAT*/
-    case /^.+Ⓖ.+MILITECH Patr10t . .+$/.test(data): {
-      const regex = /[^➯]+$/;
-      const match = regex.exec(data.toString());
-      const value = match ? match[0].trim() : null;
-      renderChatBox(`${status.info}Sending >>>${value}<<<`);
-      //bot.chat(`!${value}`);
-    }
-    break;
-    case /^.+Ⓛ.+MILITECH Patr10t . .+$/.test(data): {
-      const regex = /[^➯]+$/;
-      const match = regex.exec(data.toString());
-      const value = match ? match[0].trim() : null;
-      renderChatBox(`${status.info}Sending >>>${value}<<<`);
-      bot.chat(value);
-    }
-    break;
     /* LOGIN */
     case data == '[❤] Иди к порталам, и выбери сервер для игры, либо воспользуйся компасом.':
       if (lockLobby) {
@@ -445,8 +427,7 @@ async function cliCommands(data) {
     case /^rep$/.test(data):
       restoreLoadout();
     break;
-
-    // DEBUG
+    /* DEBUG */
     case /^test$/.test(data): {
       const datablock = [
       util.inspect(bot.players['Patr10t'], { depth: null, colors: false }),
@@ -545,9 +526,9 @@ function rateBoolValue(current, reverse) {
   const statusType = reverse ? (current ? "bad" : "good") : (current ? "good" : "bad");
   return `${status[statusType]}${current}{/}`;
 }
-//
+
 const adjustVelocity = (value, boundary) => Math.max(-boundary, Math.min(value, boundary));
-//
+
 function floorVec3(vec3) {
   return {
       x: Math.floor(vec3.x),
@@ -611,7 +592,6 @@ function resetVelocity() {
     // retard mode but works?
     renderChatBox(`${status.verbose}RESET vel`)
     bot.entity.velocity.set(0,-0.08,0);
-    bot.entity.velocity.set(0,-0.08,0);
   }
 }
 async function unstuck(path) {
@@ -641,8 +621,7 @@ function jesusOnLiquid() {
     isJesusing = false;
   }
 }
-function strafeMovement() {
-  const entity = bot.pvp.target;
+function strafeMovement(entity) {
   const entityPos = [entity.position.x,entity.position.z];
 
   const entityCloseToWebBlock = entityWebBlock[0] && entityWebBlock[0].distanceTo(entity.position) <= 1.5;
@@ -666,7 +645,7 @@ function strafe(position,angleDegrees,speed) {
   const [velocityX,velocityZ] = getStrafeVelocity(position,angleDegrees,speed);
   if (bot.entity.onGround && !isJesusing && !isInLiquid) {
     bot.entity.velocity.set(velocityX,0.42,velocityZ);
-    bot.setControlState('forward', false);
+    //bot.setControlState('forward', false);
   }
 }
 /*
@@ -769,15 +748,15 @@ async function equipItem(itemId, destination) {
     } catch (err) {
       renderError(err.message);
     }
-  } else renderChatBox(`${status.warn}I have nothing to equip`);
+  } else {
+    throw new Error(`${status.error}No itemId found to equip`);
+  }
 }
 async function tossItem (itemId, amount) {
   const t0 = performance.now();
   amount = parseInt(amount, 10);
   itemId = parseInt(itemId, 10);
-  if (!itemId) {
-    renderChatBox(`${status.warn}I have no id of the item to toss`);
-  } else {
+  if (itemId) {
     try {
       if (amount) {
         await bot.toss(itemId, null, amount);
@@ -786,11 +765,13 @@ async function tossItem (itemId, amount) {
       } else {
         await bot.tossStack(itemId);
         const t1 = performance.now();
-        renderChatBox(`${status.ok}Tossed ${itemId} in ${(t1 - t0).toFixed(2)}ms`);
+        renderChatBox(`${status.ok}Tossed stack of ${itemId} in ${(t1 - t0).toFixed(2)}ms`);
       }
     } catch (err) {
-      renderError(err.message);
+      renderError(err);
     }
+  } else {
+    throw new Error(`${status.error}No itemId found to toss`);
   }
 }
 async function tossAllItems() {
@@ -843,12 +824,15 @@ function getItemCount(itemId) {
 function resetCombat() {
   bot.pvp.forceStop();
   bot.pathfinder.setGoal(null);
-  renderChatBox(`${status.ok}resetCombatVariables completed`);
+  renderChatBox(`${status.ok}Reset completed`);
 }
 /*
   FUNCTIONS: COMBAT INVENTORY MANAGMENT
 */
+//let isEquippingArmor = false
 async function equipArmor() {
+  if (lockValue['armor']) return;
+  lockValue['armor'] = true;
   const armorPieces = [
     { destination: 'head', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_helmet.id, null), minEnch: 8 },
     { destination: 'torso', item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_chestplate.id, null), minEnch: 6 },
@@ -857,37 +841,25 @@ async function equipArmor() {
   ];
   for (const piece of armorPieces) {
     if (piece.item?.nbt && piece.item && piece.item.enchants.length >= piece.minEnch) {
-      if (bot.inventory.slots[bot.getEquipmentDestSlot(piece.destination)] === null || bot.inventory.slots[bot.getEquipmentDestSlot(piece.destination)].type != piece.item.type) {
-        strikeValue['armor']++;
-        if (strikeValue['armor'] >= 2) {
-          renderChatBox(`${status.armor}${status.warn}${piece.destination} timeout at ${strikeValue['armor']}`);
-          await bot.waitForTicks(5);
-          strikeValue['armor'] = 0;
-          return;
-        }
+      const equipSlot = bot.getEquipmentDestSlot(piece.destination);
+      if (bot.inventory.slots[equipSlot] === null || bot.inventory.slots[equipSlot].type != piece.item.type) {
         lockValue['hand'] = true;
         lockValue['off-hand']  = true;
-        renderChatBox(`${status.armor}`);
         await bot.waitForTicks(5);
         await equipItem(piece.item.type, piece.destination);
-        renderChatBox(`${status.armor}`);
         lockValue['hand'] = false;
         lockValue['off-hand']  = false;
       }
     }
   }
+  lockValue['armor'] = false;
 }
 async function equipGapple() {
+  if (lockValue['gapple']) return;
+  lockValue['gapple'] = true;
   if (((bot.health + bot.entity?.metadata[11]) <= 20 && bot.pvp.target || (bot.health + bot.entity?.metadata[11]) <= 19.9) && (((bot.health + bot.entity?.metadata[11]) > 3+deltaHealth && getItemCount('totem_of_undying') >= 1) || (getItemCount('totem_of_undying') === 0))) {
     const gapple = bot.inventory.findInventoryItem(bot.registry.itemsByName.golden_apple.id, null) || bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')];
     if (gapple && gapple?.type === bot.registry.itemsByName.golden_apple.id) {
-      strikeValue['gapple']++;
-      if (strikeValue['gapple'] >= 2) {
-        renderChatBox(`${status.gapple}${status.warn}Golden apple timeout at ${strikeValue['gapple']}`);
-        await bot.waitForTicks(45);
-        strikeValue['gapple'] = 0;
-        return;
-      }
       isHealing = true;
       lockValue['off-hand'] = true;
       const oldItemCount = getItemCount('golden_apple');
@@ -914,18 +886,14 @@ async function equipGapple() {
       lockValue['off-hand'] = false;
     }
   }
+  lockValue['gapple'] = false;
 }
 async function equipBuff() {
+  if (lockValue['buff']) return;
+  lockValue['buff'] = true;
   if (!bot.entity.effects['5'] && ((bot.health + bot.entity?.metadata[11]) >= 19 || (bot.health + bot.entity?.metadata[11]) > 10 && cooldown['gapple'].time >= 5)) {
     const buff = bot.inventory.findInventoryItem(bot.registry.itemsByName.potion.id, null);
     if (buff?.nbt && buff && bot.pvp.target && nbt.simplify(buff.nbt).Potion === 'minecraft:strong_strength') {
-      strikeValue['buff']++;
-      if (strikeValue['buff'] >= 2) {
-        renderChatBox(`${status.buff}${status.warn}Buff timeout at ${strikeValue['buff']}`);
-        await bot.waitForTicks(45);
-        strikeValue['buff'] = 0;
-        return;
-      }
       lockValue['off-hand'] = true;
       const oldItemCount = getItemCount('potion');
       renderChatBox(`${status.buff}${status.info}Buff STARTED`);
@@ -940,8 +908,7 @@ async function equipBuff() {
       bot.deactivateItem();
 
       const newItemCount = getItemCount('potion');
-      const cooldown = 14;
-      handleCooldown(cooldown, 'buff');
+      handleCooldown(14, 'buff');
       if (newItemCount < oldItemCount || bot.entity.effects['5']) {
         renderChatBox(`${status.buff}${status.ok}Buff SUCCESS`);
       } else {
@@ -950,18 +917,14 @@ async function equipBuff() {
       lockValue['off-hand'] = false;
     }
   }
+  lockValue['buff'] = false;
 }
 async function equipTotem() {
+  if (lockValue['totem']) return;
+  lockValue['totem'] = true;
   if (((bot.health + bot.entity?.metadata[11]) <= 3+deltaHealth || getItemCount('golden_apple') === 0) && bot.inventory.slots[45]?.type != bot.registry.itemsByName.totem_of_undying.id) {
     const totem = bot.inventory.findInventoryItem(bot.registry.itemsByName.totem_of_undying.id, null);
     if (totem) {
-      strikeValue['totem']++;
-      if (strikeValue['totem'] >= 2) {
-        renderChatBox(`${status.totem}${status.warn}Totem timeout at ${strikeValue['totem']}`);
-        await bot.waitForTicks(5);
-        strikeValue['totem'] = 0;
-        return;
-      }
       lockValue['off-hand'] = true;
       renderChatBox(`${status.totem}`);
       await bot.waitForTicks(3);
@@ -969,69 +932,59 @@ async function equipTotem() {
       renderChatBox(`${status.totem}`);
       lockValue['off-hand'] = false;
     }
-  } 
+  }
+  lockValue['totem'] = false;
 }
 async function tossPearl() {
+  if (lockValue['pearl']) return;
+  lockValue['pearl'] = true;
   const entity = bot.nearestEntity(e => e.type === 'player' && e.username === bot.pvp.target?.username);
-  if (entity && (entity?.position.distanceTo(bot.entity.position) >= 10 || bot.player.isInWater || bot.player.isInLava || bot.player.isInWeb) && cooldown['pearl'].time === 0) {
-    const pearl = bot.inventory.findInventoryItem(bot.registry.itemsByName.ender_pearl.id, null);
-    if (pearl) {
-      strikeValue['pearl']++;
-      if (strikeValue['pearl'] >= 2) {
-        renderChatBox(`${status.pearl}${status.warn}Pearl timeout at ${strikeValue['pearl']}`);
-        await bot.waitForTicks(5);
-        strikeValue['pearl'] = 0;
-        return;
-      }
-      lockValue['off-hand'] = true;
-      isHunting = false;
-      resetCombat();
-      const angleInBlocks = getPearlTrajectory(entity.position.distanceTo(bot.entity.position));
-      const oldItemCount = getItemCount('ender_pearl');
-      renderChatBox(`${status.pearl}${status.info}Pearl STARTED`);
+  const pearl = bot.inventory.findInventoryItem(bot.registry.itemsByName.ender_pearl.id, null);
 
-      if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != pearl.type) {
-        await bot.waitForTicks(3);
-        await equipItem(pearl.type, 'off-hand');
-      }
+  if (pearl && entity && (entity?.position.distanceTo(bot.entity.position) >= 10 || bot.player.isInWater || bot.player.isInLava || bot.player.isInWeb) && cooldown['pearl'].time === 0) {
+    renderChatBox(`${status.pearl}${status.ok}Pearl conditions met`);
+    lockValue['off-hand'] = true;
+    isHunting = false;
+    resetCombat();
 
-      bot.pathfinder.setGoal(null);
-      bot.pvp.forceStop();
+    const angleInBlocks = getPearlTrajectory(entity.position.distanceTo(bot.entity.position));
+    const oldItemCount = getItemCount('ender_pearl');
 
-      await bot.lookAt(entity.position.offset(0,angleInBlocks+0.8,0), true);
-      await bot.waitForTicks(5);
-      bot.activateItem(true);
-      await bot.waitForTicks(2);
-      bot.deactivateItem();
-
-      const newItemCount = getItemCount('ender_pearl');
-      const cooldown = 14;
-      if (newItemCount < oldItemCount) {
-        handleCooldown(cooldown, 'pearl');
-        renderChatBox(`${status.pearl}${status.ok}Pearl SUCCESS`);
-      } else {
-        handleCooldown(cooldown, 'pearl');
-        renderChatBox(`${status.pearl}${status.error}Pearl FAILED`);
-      }
-      isHunting = true;
-      lockValue['off-hand'] = false;
+    if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != pearl.type) {
+      await bot.waitForTicks(3);
+      await equipItem(pearl.type, 'off-hand');
     }
+
+    bot.pathfinder.setGoal(null);
+    bot.pvp.forceStop();
+
+    await bot.lookAt(entity.position.offset(0,angleInBlocks+0.8,0), true);
+    await bot.waitForTicks(5);
+    bot.activateItem(true);
+    await bot.waitForTicks(2);
+    bot.deactivateItem();
+
+    const newItemCount = getItemCount('ender_pearl');
+    handleCooldown(14, 'pearl');
+    if (newItemCount < oldItemCount) {
+      renderChatBox(`${status.pearl}${status.ok}Pearl SUCCESS`);
+    } else {
+      renderChatBox(`${status.pearl}${status.error}Pearl FAILED`);
+    }
+    isHunting = true;
+    lockValue['off-hand'] = false;
   }
+  lockValue['pearl'] = false;
 }
 async function equipPassive() {
+  if (lockValue['passive']) return;
+  lockValue['passive'] = true;
   const itemPieces = [
     { item: bot.inventory.findInventoryItem(bot.registry.itemsByName.golden_apple.id, null), slot: 'off-hand', slotCheck: bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')], slotUsed: 'off-hand' },
     { item: bot.inventory.findInventoryItem(bot.registry.itemsByName.diamond_sword.id, null), slot: 'hand', slotCheck: bot.heldItem, slotUsed: 'hand' }
   ]
   for(const piece of itemPieces) {
     if (piece.item && piece.slotCheck?.type != piece.item.type) {
-      strikeValue['passive']++;
-      if (strikeValue['passive'] >= 2) {
-        renderChatBox(`${status.passive}${status.warn}Passive timeout at ${strikeValue['passive']}`);
-        await bot.waitForTicks(5);
-        strikeValue['passive'] = 0;
-        return;
-      }
       if ((piece.slotUsed === 'off-hand' || piece.item.enchants.length >= 8) && !lockValue[piece.slotUsed]) {
         lockValue[piece.slotUsed] = true;
         renderChatBox(`${status.passive}${piece.item.displayName}`);
@@ -1042,6 +995,7 @@ async function equipPassive() {
       }
     }
   }
+  lockValue['passive'] = false;
 }
 async function tossJunk() {
   const junkArray = [
@@ -1130,15 +1084,19 @@ function huntPlayer() {
   })();
   const entity = bot.nearestEntity(filterEntity);
   if (entity) { 
-    if ((isInLiquid || isJesusing) && !bot.pathfinder.isMoving()) {
+    if ((isInLiquid || isJesusing || bot.entity.isInWeb) && !bot.pathfinder.isMoving()) {
       renderChatBox(`${status.debug} ${isInLiquid || isJesusing} ${bot.pathfinder.isMoving()}`);
       bot.setControlState('forward', true);
     }
+    if (bot.entity.isInWeb) bot.setControlState('jump', false);
+    strafeMovement(entity);
     if (entity.position.distanceTo(bot.entity.position) <= bot.pvp.attackRange) {
       if (entity.elytraFlying) {
         bot.lookAt(entity.position.offset(0,0,0), true);
+      } else if (entity.isInWater || entity.isInLava) {
+        bot.lookAt(entity.position.offset(0,entity.height,0), true);
       } else {
-        bot.lookAt(entity.position.offset(0,0.8,0), true);
+        bot.lookAt(entity.position.offset(0,1,0), true);
       }
     }
     bot.pvp.attack(entity);
@@ -1153,22 +1111,20 @@ function huntPlayer() {
 bot.on('physicsTick', async () => {
   if (!isWindowLocked || !isAutoEquipping) return;
   jesusOnLiquid();
-  if (bot.entity.isInWeb) bot.setControlState('jump', false);
   // HIGHEST PRIORITY
-  if (strikeValue['armor'] < 2) equipArmor(); // MAIN HAND
-  if (cooldown['gapple'].time === 0 && !cooldown['gapple'].lock && strikeValue['gapple'] < 2) equipGapple(); // OFFHAND
+  if (!lockValue['armor']) equipArmor(); // MAIN HAND
+  if (!lockValue['gapple'] && cooldown['gapple'].time === 0 && !cooldown['gapple'].lock) equipGapple(); // OFFHAND
   if (!isHealing && !lockValue['off-hand']) {
-    if (strikeValue['totem'] < 2) equipTotem(); // OFFHAND
-    if (cooldown['buff'].time === 0 && !cooldown['buff'].lock && strikeValue['buff'] < 2) equipBuff(); // OFFHAND
-    if (cooldown['pearl'].time === 0 && !cooldown['pearl'].lock && strikeValue['pearl'] < 2) tossPearl(); // OFFHAND
+    if (!lockValue['totem']) equipTotem(); // OFFHAND
+    if (!lockValue['buff'] && cooldown['buff'].time === 0 && !cooldown['buff'].lock) equipBuff(); // OFFHAND
+    if (!lockValue['pearl'] && cooldown['pearl'].time === 0 && !cooldown['pearl'].lock) tossPearl(); // OFFHAND
   }
   // HIGH PRIORITY
   if (!isHealing && !lockValue['hand'] && !lockValue['off-hand'] && (bot.health+bot.entity?.metadata[11]) > 3+deltaHealth) {
-    if (strikeValue['passive'] < 2) equipPassive(); // MAIN HAND
-    if (cooldown['pvp'].time === 0 && strikeValue['junk'] < 2) tossJunk(); // MAIN HAND
+    if (!lockValue['passive']) equipPassive(); // MAIN HAND
+    if (!lockValue['junk'] && cooldown['pvp'].time === 0) tossJunk(); // MAIN HAND
   }
   // LOW PRIORITY
-  if (bot.pvp.target) strafeMovement();
   if (isHunting) huntPlayer();
 });
 setInterval(() => {
@@ -1200,9 +1156,8 @@ setInterval(() => {
   `HIT ${cooldown['hit']?.lock ? status.bad+(cooldown['hit']?.time ?? 0).toFixed(2) : status.good+(cooldown['hit']?.time ?? 0).toFixed(2)}{/} PVP ${cooldown['pvp']?.lock ? status.bad+(cooldown['pvp']?.time ?? 0).toFixed(2) : status.good+(cooldown['pvp']?.time ?? 0).toFixed(2)}{/} BUFF ${cooldown['buff']?.lock ? status.bad+(cooldown['buff']?.time ?? 0).toFixed(2) : status.good+(cooldown['buff']?.time ?? 0).toFixed(2)}{/} GAPPLE ${cooldown['gapple']?.lock ? status.bad+(cooldown['gapple']?.time ?? 0).toFixed(2) : status.good+(cooldown['gapple']?.time ?? 0).toFixed(2)}{/} PEARL ${cooldown['pearl']?.lock ? status.bad+(cooldown['pearl']?.time ?? 0).toFixed(2) : status.good+(cooldown['pearl']?.time ?? 0).toFixed(2)}{/} ` +
   `HAND ${rateBoolValue(lockValue['hand'],true)} OFF-HAND ${rateBoolValue(lockValue['off-hand'],true)}\n` +
   `HSR ${rateIntValue(100,((pvpHitSuccess/pvpHitAttempts)*100))} ` +
-  `JESUS RDY ${rateBoolValue(isInLiquid)} STBY ${rateBoolValue(isJesusing)} ` + 
+  `JESUS isInLiquid ${rateBoolValue(isInLiquid)} isJesusing ${rateBoolValue(isJesusing)} ` + 
   `STRAFE RDY ${rateBoolValue(bot.entity.onGround)} ` + 
-  `PREVENT ${rateBoolValue(isPreventing)} ` +
   `CONTROL ${rateBoolValue(bot.getControlState('forward'))} ${rateBoolValue(bot.getControlState('sprint'))} ${rateBoolValue(bot.getControlState('jump'))} `
   renderFunctionBox(banner);
 }, 50);
@@ -1244,7 +1199,7 @@ bot.on('particle', (particle) => {
   const floorParticle = floorVec3(particle.position);
   const floorBot = floorVec3(bot.entity.position);
   if (particle.id === 45 && floorParticle.x === floorBot.x && floorParticle.y === floorBot.y && floorParticle.z === floorBot.z) {
-    renderChatBox(`${status.debug}CRITICAL HIT FROM BOT ${util.inspect(particle)}\n${status.debug}${bot.entity.position}`);
+    renderChatBox(`${status.pvp}${status.info}Critical hit from bot`);
   }
 })
 bot.on('death', async() => {
