@@ -1,7 +1,7 @@
-var blessed = require('blessed')
+let blessed = require('blessed')
 , contrib = require('blessed-contrib');
 
-var screen = blessed.screen(
+let screen = blessed.screen(
     {
         terminal: 'xterm-256color',
         fullUnicode: true,
@@ -10,9 +10,9 @@ var screen = blessed.screen(
     }
 );
 
-var grid = new contrib.grid({rows: 24, cols: 24, screen: screen})
+let grid = new contrib.grid({rows: 24, cols: 24, screen: screen})
 
-var chatBox = grid.set(0, 0, 21, 24, blessed.log, 
+let chatBox = grid.set(0, 0, 21, 24, blessed.log, 
     {
         parent: screen,
         tags: true,
@@ -45,7 +45,7 @@ var chatBox = grid.set(0, 0, 21, 24, blessed.log,
         }
     }
 )
-var functionBox = grid.set(21, 0, 2, 24, blessed.log,
+let functionBox = grid.set(21, 0, 2, 24, blessed.log,
     {
         parent: screen,
         tags: true,
@@ -63,7 +63,7 @@ var functionBox = grid.set(21, 0, 2, 24, blessed.log,
         }
     }
 )
-var inputBox = grid.set(23, 0, 1, 24, blessed.textbox,
+let inputBox = grid.set(23, 0, 1, 24, blessed.textbox,
     {
         parent: screen,
         keys: true,
