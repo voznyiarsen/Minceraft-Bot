@@ -1,7 +1,7 @@
 const mineflayer = require('mineflayer');
 const PrettyError = require('pretty-error');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
-const { GoalFollow } = require('mineflayer-pathfinder').goals;
+const { GoalFollow, GoalXZ, GoalNear} = require('mineflayer-pathfinder').goals;
 const pvp = require('mineflayer-pvp').plugin;
 const bloodhoundPlugin = require('mineflayer-bloodhound')(mineflayer);
 
@@ -12,29 +12,34 @@ const nbt = require('prismarine-nbt');
 const Item = require('prismarine-item')('1.12.2');
 const util = require('util');
 
+const { Vec3 } = require('vec3');
+
 const pe = new PrettyError();
 pe.skipNodeFiles();
 pe.skipPackage('blessed', 'vm');
 pe.skipPath(__filename);
 
-/* fuck i wish i made it modular */
+/* fuck i wish that i made it modular */
 
 const host = process.argv[2];
 const username = process.argv[3];
 const password = process.argv[4]; 
 const master = process.argv[5];
 
-const bot = mineflayer.createBot(
-  {
-    host: host,
-    port: '25565',
-    username: username,
-    logErrors: false,
-    hideErrors: true,
-    checkTimeoutInterval: 60*1000,
-    version: '1.12.2'
-  }
-);
+const config = {
+  host: host,
+  port: '25565',
+  username: username,
+  logErrors: false,
+  hideErrors: true,
+  checkTimeoutInterval: 60*1000,
+  version: '1.12.2'
+}
+// store options here instead of hardcoding it
+const options = {
+  itemCooldown: 14,
+  healthOffset: 3
+}
 
 const status = {
   gapple: '{magenta-bg}{black-fg}GAPPLE{/} ',
@@ -56,32 +61,30 @@ const status = {
   hit: '{red-bg}{white-fg}HIT{/}'
 };
 
-let isLogging = true;
+let bot;
 
+let isLogging = true;
 let isAutoEquipping = true;
 let isWindowLocked = false;
-
-let [isHunting, isHealing] = [false, false];
+let isSilent = true;
+let isHunting = false;
+let isHealing = false;
+let isChatEnabled = true;
+let isLobbyLocked = false;
 
 let pvpHitAttempts = 0;
 let pvpHitSuccess = 0;
-
 let noPvPCountdownLock = false;
 
 let combatMode = 2;
-
 let allies = [master, 'Plotva', 'maksim2008'];
 
 let tabCompleteIndex = 0;
 let tabComplete;
 
-let isChatEnabled = true;
-
 let botWebBlock;
 let entityWebBlock;
-
-let lockLobby = false;
-
+/* ARENA COORDINATES FOR combatMode 2 */
 const cylinder1 = {
   center: [2190.5, 0, 1003.5],
   radius: 39.85,
@@ -126,48 +129,8 @@ let oldHealth = 0;
 let newHealth = 0;
 let deltaHealth = 0;
 
-let isPreventing = false;
-let isJesusing = false;
-let isInLiquid = false;
-/*
-  LOAD PLUGINS
-*/
-
-bot.once('inject_allowed', () => {
-  bot.setMaxListeners(999);
-
-  bot.loadPlugin(pathfinder);
-  bot.loadPlugin(pvp);
-  bloodhoundPlugin(bot);
-
-  bot.physics.yawSpeed = 10*10^3;
-  bot.physics.pitchSpeed = 10*10^3;
-  bot.pathfinder.thinkTimeout = 5000;
-  bot.pathfinder.tickTimeout = 40;
-
-  bot.bloodhound.yaw_correlation_enabled = true;
-
-  bot.pvp.movements.allowEntityDetection = true;
-  bot.pvp.movements.allowFreeMotion = true;
-  bot.pvp.movements.allowParkour = true;
-  bot.pvp.movements.maxDropDown = 256;
-
-  bot.pvp.movements.allow1by1towers = false;
-  bot.pvp.movements.canOpenDoors = false;
-  bot.pvp.movements.canDig = false;
-
-  bot.pvp.movements.scafoldingBlocks = [null];
-
-  bot.pvp.movements.infiniteLiquidDropdownDistance = true;
-  bot.pvp.attackRange = 4;
-  bot.pvp.followRange = 2;
-  //bot.pvp.meleeAttackRate = new pvpLibrary.RandomTicks(10,11);
-
-  bot.pvp.viewDistance = 128;
-  //bot.pvp.movements.blocksToAvoid = new Set();
-  //bot.pvp.movements.blocksToAvoid.delete(30);
-  //bot.pvp.movements.emptyBlocks.delete(30);
-});
+let isTouchingLiquid = false;
+let isOverLiquid = false;
 /*
   FUNCTIONS: COMMAND HANDLING
 */
@@ -192,18 +155,13 @@ async function getTabComplete() {
     renderChatBox(`${status.warn}No tab-completions available.`);
   }
 }
-/*
-let trapdoor = bot.registry.blocksByName['oak_trapdoor'].id
-let block = bot.findBlock({ trapdoor })
-use for equipItem !!!! rewrite!!
-*/
 async function logAbnormalities(data) {
   const filteredMessages = [
     /^\[❤\] Иди к порталам, и выбери сервер для игры, либо воспользуйся компасом\.$/,
     /^\[Внимание\] АКЦИЯ! Неделя супер скидок! Успей купить выгодно:\) Покупать тут - https:\/\/MineLegacy\.ru $/
   ];
-  /* Wrote this because the server admin occasionally leaks IPs of players */
-  if (lockLobby && !filteredMessages.some(regex => regex.test(data))) {
+  /* Wrote this because the server admin occasionally leaks IPs of players, just in case ;)*/
+  if (isLobbyLocked && !filteredMessages.some(regex => regex.test(data))) {
     renderChatBox(`${status.warn}${status.warn}ABNORMALITY FOUND!, logging to file...`);
     renderChatBox(`AB>>${data}<<AB`);
     fs.appendFile('DO_NOT_DELETE_abnormal.log', data + new Date().toLocaleString() + '\n', (err) => {
@@ -226,40 +184,46 @@ async function chatCommands(data) {
   switch(true) {
     /* LOGIN */
     case data == '[❤] Иди к порталам, и выбери сервер для игры, либо воспользуйся компасом.':
-      if (lockLobby) {
+      if (isLobbyLocked) {
         isWindowLocked = true;
         isAutoEquipping = false;
         const redstone = bot.inventory.findInventoryItem(bot.registry.itemsByName.redstone.id, null);
         if (Object.keys(bot.players).length === 1 && redstone) {
-          renderChatBox(`${status.warn}Player list length is ${Object.keys(bot.players).length}, viewing players if not enabled, enabling...`);
+          renderChatBox(`${status.info}There is only ${Object.keys(bot.players).length} player`);
           await equipItem(redstone.type, 'hand');
           await bot.waitForTicks(5);
           bot.activateItem();
         }
         return;
-      } else isAutoEquipping = true;
+      }
+      isAutoEquipping = true;
       isWindowLocked = false;
-      renderChatBox(`${status.ok}isWindowLocked? ${isWindowLocked}`);
+      renderChatBox(`${status.ok}isAutoEquipping? ${rateBoolValue(isAutoEquipping)}`);
+      renderChatBox(`${status.ok}isWindowLocked? ${rateBoolValue(isWindowLocked)}`);
       bot.setQuickBarSlot(0);
       bot.activateItem();
     break;
     case /^\s{43}$/.test(data):
-      if (lockLobby) {
+      if (isLobbyLocked) {
         isWindowLocked = true;
         isAutoEquipping = false;
         return;
-      }else isAutoEquipping = true;
+      }
+      isAutoEquipping = true;
       isWindowLocked = true;
-      renderChatBox(`${status.ok}isWindowLocked? ${isWindowLocked}`);
+      renderChatBox(`${status.ok}isAutoEquipping? ${rateBoolValue(isAutoEquipping)}`);
+      renderChatBox(`${status.ok}isWindowLocked? ${rateBoolValue(isWindowLocked)}`);
     break;
     case /^Вы были телепортированы в Lobby.+$/.test(data):
-      if (lockLobby) {
+      if (isLobbyLocked) {
         isWindowLocked = true;
         isAutoEquipping = false;
         return;
       }
       isWindowLocked = false;
-      renderChatBox(`${status.info}isWindowLocked? ${isWindowLocked}`);
+      renderChatBox(`${status.ok}isAutoEquipping? ${rateBoolValue(isAutoEquipping)}`);
+      renderChatBox(`${status.ok}isWindowLocked? ${rateBoolValue(isWindowLocked)}`);
+      await bot.waitForChunksToLoad();
       await bot.waitForTicks(5);
       bot.setQuickBarSlot(0);
       bot.activateItem();
@@ -271,15 +235,23 @@ async function chatCommands(data) {
     case data == 'Телепортирование...': {
       await bot.waitForChunksToLoad();
       await bot.waitForTicks(2);
-      const entity = bot.nearestEntity(e => e.type === 'player' && e.position.distanceTo(bot.entity.position) < 1);
+      const entity = bot.nearestEntity(e => e.type === 'player' && e.position.distanceTo(bot.entity.position) <= 0.1);
       if (entity) {
         renderChatBox(`${status.warn}${entity.username} teleported me!`);
-        bot.chat(`!${entity.username} телепортировал меня`);
+        if (isSilent) {
+          renderChatBox(`${status.warn}isSilent is set to ${rateBoolValue(isSilent)}, not running the bot.chat() command`);
+        } else {
+          bot.chat(`/cc ${entity.username} телепортировал меня`);
+        }
       }
     }
     break;
     /* PvP */
     case /^\[MineLegacy\] Вы убили игрока .+, и получили за это \$\d+\.\d+\. Нанесённый урон: \d+\.\d\/\d+\.\d$/.test(data): {
+      if (isSilent) {
+        renderChatBox(`${status.warn}isSilent is set to ${rateBoolValue(isSilent)}, not taunting player`);
+        return;
+      }
       let insults = ["БЫЛ ПОПУЩЕН",
         "БЫЛ ПРИХЛОПНУТ ТАПКОМ",
         "EZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
@@ -301,17 +273,20 @@ async function chatCommands(data) {
         "ИЗИ БОТЯРА",
         "ЗЕМЛЯ ТЕБЕ СТЕКЛОВАТОЙ"];
       const randomIndex = Math.floor(Math.random() * insults.length);
-      renderChatBox(`${status.pvp}Taunting player ${bot.pvp.target.username}`);
       bot.chat(`!${bot.pvp.target.username} ${insults[randomIndex]}`);
     }
     break;
     case /^\[MineLegacy\] Вы были убиты игроком .+, и потеряли \$\d+\.\d+\.$/.test(data):
+      if (isSilent) {
+        renderChatBox(`${status.warn}isSilent is set to ${rateBoolValue(isSilent)}, not excusing`);
+        return;
+      }
     break;
     case /^Вы сможете использовать золотое яблоко через \d+ секунд.*\.$/.test(data): {
       const regex = /\d+/;
       const match = regex.exec(data.toString());
       const value = match ? match[0] : null;
-      handleCooldown(parseInt(value,10)+0.95, 'gapple');
+      handleCooldown(parseInt(value,10), 'gapple');
     }
     break;
     case /^Режим PVP, не выходите из игры \d+ секунд.*\.$/.test(data): {
@@ -325,7 +300,7 @@ async function chatCommands(data) {
       const regex = /\d+/;
       const match = regex.exec(data.toString());
       const value = match ? match[0] : null;
-      handleCooldown(parseInt(value,10)+0.95, 'pearl');
+      handleCooldown(parseInt(value,10), 'pearl');
     }
     break;
     case data == 'Войдите - /login [пароль]':
@@ -349,7 +324,7 @@ async function chatCommands(data) {
           renderChatBox(`${status.pvp}${status.info}Can't PvP here, stopping`);
           break;
         }
-        await bot.waitForTicks(20);
+        await bot.waitForTicks(40);
       }
       noPvPCountdownLock = false;
     break;
@@ -379,33 +354,58 @@ async function cliCommands(data) {
     case /^uneqall$/.test(data): 
       unequipAllItems();
     break;
+    /* PATHFIND */
+    case /^goto -?\d*\s?-?\d*\s?-?\d*$/.test(data): 
+      if (command.length === 4) {
+        let [x, y, z] = [command[1], command[2], command[3]];
+        x = parseInt(x, 10);
+        y = parseInt(y, 10);
+        z = parseInt(z, 10);
+        renderChatBox(`${status.ok}Set goal to X: ${x} Y: ${y} Z: ${z}`);
+
+        const goal = new GoalNear(x, y, z, 1);
+        bot.pathfinder.setGoal(goal);
+      } else if (command.length === 3) {
+        let [x, z] = [command[1], command[2]];
+        x = parseInt(x, 10);
+        z = parseInt(z, 10);
+        renderChatBox(`${status.ok}Set goal to X: ${x} Z: ${z}`);
+
+        const goal = new GoalXZ(x, z);
+        bot.pathfinder.setGoal(goal);
+      }
+    break;
     /* CHANGE MODE */
-    case /^sweq$/.test(data):
+    case /^ieq$/.test(data):
       isAutoEquipping = !isAutoEquipping;
-      renderChatBox(`${status.ok}isAutoEquipping set to ${isAutoEquipping}`);
+      renderChatBox(`${status.ok}isAutoEquipping set to ${rateBoolValue(isAutoEquipping)}`);
     break;
     case /^cm(\s[0-4])?$/.test(data):
       combatMode = command[1] ? parseInt(command[1], 10) : (combatMode + 1) % 4;
       renderChatBox(`${status.ok}combatMode set to ${combatMode}`);
     break;
-    case /^ec$/.test(data):
+    case /^ice$/.test(data):
       isChatEnabled = !isChatEnabled;
-      renderChatBox(`${status.ok}isChatEnabled set to ${isChatEnabled}`);
+      renderChatBox(`${status.ok}isChatEnabled set to ${rateBoolValue(isChatEnabled)}`);
     break;
-    case /^l$/.test(data):
-      renderChatBox(`${status.ok}isLogging set to ${!isLogging}`);
+    case /^il$/.test(data):
+      renderChatBox(`${status.ok}isLogging set to ${rateBoolValue(!isLogging)}`);
       isLogging = !isLogging;
-      renderChatBox(`${status.ok}isLogging set to ${isLogging}`);
+      renderChatBox(`${status.ok}isLogging set to ${rateBoolValue(isLogging)}`);
     break;
-    case /^ll$/.test(data):
-      lockLobby = !lockLobby
-      renderChatBox(`${status.ok}lockLobby set to ${lockLobby}`)
+    case /^ill$/.test(data):
+      isLobbyLocked = !isLobbyLocked
+      renderChatBox(`${status.ok}isLobbyLocked set to ${rateBoolValue(isLobbyLocked)}`);
+    break;
+    case /^is$/.test(data):
+      isSilent = !isSilent;
+      renderChatBox(`${status.ok}isSilent set to ${rateBoolValue(isSilent)}`);
     break;
     /* ENABLE/DISABLE COMBAT */
     case /^g$/.test(data):
       isHunting = !isHunting;
       if (!isHunting) resetCombat();
-      renderChatBox(`${status.ok}isHunting set to ${isHunting}`);
+      renderChatBox(`${status.ok}isHunting set to ${rateBoolValue(isHunting)}`);
     break;
     case /^s$/.test(data):
       resetCombat();
@@ -421,28 +421,32 @@ async function cliCommands(data) {
     break;
     case /^raa$/.test(data):
       allies = [master, bot.username];
-      renderChatBox(`${status.ok}Removed all allies`)
+      renderChatBox(`${status.ok}Removed all allies`);
     break;
     /* RESTORE LOADOUT */
     case /^rep$/.test(data):
       restoreLoadout();
     break;
-    /* DEBUG */
-    case /^test$/.test(data): {
-      const datablock = [
-      util.inspect(bot.players['Patr10t'], { depth: null, colors: false }),
-      ]
-      for (const data of datablock) fs.appendFile('test.txt', data, (err) => {
-        if (err) throw err;
-        renderChatBox(`${status.ok}${data} was appended to file`);
-      });
+    /* CHECK PLAYER */
+    case /^pdb \S+$/.test(data): {
+      const player = bot.players[command[1]];
+      if (player) {
+        renderChatBox(`${status.ok}Player found`);
+        renderChatBox(util.inspect(player, true, null, true));
+      } else {
+        renderChatBox(`${status.warn}No entry of player found`);
+      }
     }
     break;
-    case /^rg$/.test(data): {
-      const cobweb = bot.players[master];
-      if (cobweb) {
-        renderChatBox(util.inspect(cobweb));
-      } else renderChatBox(`${status.warn}No cobwebs found`);
+    /* CHECK ITEM IN SLOT */
+    case /^sdb \d+$/.test(data): {
+      const item = bot.inventory.slots[command[1]];
+      if (item) {
+        renderChatBox(`${status.ok}Item found`);
+        renderChatBox(util.inspect(item, true, null, true));
+      } else {
+        renderChatBox(`${status.warn}No entry of item is slot ${command[1]} found`);
+      }
     }
     break;
     /* LIST ELEMENTS */
@@ -470,9 +474,7 @@ async function cliCommands(data) {
 async function handleCooldown(value, type) {
   cooldown[type].time = value > 0 ? value : cooldown[type].time + 0.99;
   if (type != 'pvp') renderChatBox(`${status[type]}${status.info}Cooldown for ${type} started, ${cooldown[type].time}s left`);
-
   cooldown[type].time = parseInt(cooldown[type].time, 10);
-  
   if (!cooldown[type].lock) {
     cooldown[type].lock = true;
     while (cooldown[type].time > 0) {
@@ -480,7 +482,6 @@ async function handleCooldown(value, type) {
       await bot.waitForTicks(2);
     }
   }
-  
   if (cooldown[type].time <= 0 && cooldown[type].lock === true){
     cooldown[type].time = 0;
     cooldown[type].lock = false;
@@ -513,7 +514,6 @@ function getPearlTrajectory(distance) {
   if (Math.abs(sineTheta) > 1) throw new Error(`${status.error}Distance too far for initial velocity.`);
   return distance * Math.sin(0.5 * Math.asin(sineTheta));
 }
-//
 function rateIntValue(max, current, reverse) {
   const percentage = (parseInt(current, 10) / parseInt(max, 10)) * 100;
   const roundedCurrent = Math.round(current);
@@ -526,7 +526,10 @@ function rateBoolValue(current, reverse) {
   const statusType = reverse ? (current ? "bad" : "good") : (current ? "good" : "bad");
   return `${status[statusType]}${current}{/}`;
 }
-
+function rateComboValue(currentBool, currentInt, reverse) {
+  const statusType = reverse ? (currentBool ? "bad" : "good") : (currentBool ? "good" : "bad");
+  return `${status[statusType]}${currentInt.toFixed(2)}{/}`;
+}
 const adjustVelocity = (value, boundary) => Math.max(-boundary, Math.min(value, boundary));
 
 function floorVec3(vec3) {
@@ -588,15 +591,18 @@ function updateWebBlocks() {
   FUNCTIONS: PHYSICS
 */
 function resetVelocity() {
-  if ((isInLiquid || isJesusing) && !bot.pathfinder.isMoving()) {
+  if ((isOverLiquid || isTouchingLiquid) && !bot.pathfinder.isMoving()) {
     // retard mode but works?
-    renderChatBox(`${status.verbose}RESET vel`)
+    //renderChatBox(`${status.verbose}Velocity reset`);
     bot.entity.velocity.set(0,-0.08,0);
   }
 }
+let physlock = false;
 async function unstuck(path) {
-  if (path === 'stuck' && (isInLiquid || isJesusing || bot.entity.isInWeb)) {
-    renderChatBox(`${status.warn}Bot stuck! Waiting 10 ticks to unstuck`);
+  if (physlock) return;
+  physlock = true;
+  if ((path === 'stuck' || (!isOverLiquid && isTouchingLiquid)) && isHunting) {
+    renderChatBox(`${status.warn}Bot stuck! ${!isOverLiquid ? 'bot got stuck inside water while moving' : path === 'stuck' ? 'bot got stuck some other way' : ''}`);
     isHunting = false;
     resetCombat();
     bot.clearControlStates();
@@ -604,31 +610,32 @@ async function unstuck(path) {
     await bot.waitForTicks(10);
     isHunting = true;
   }
+  physlock = false;
 }
 function jesusOnLiquid() {
-  const liquidBelow = bot.blockAt(bot.entity.position.offset(0, -0.2, 0));
-  isInLiquid = (liquidBelow && (liquidBelow.name === 'water' || liquidBelow.name === 'lava') || (bot.entity.isInWater || bot.entity.isInLava));
+  /* check if block below/at bot position is liquid */
+  const roundedBotPosition = roundVec3(bot.entity.position);
+  const liquidBelow = bot.blockAt(new Vec3(bot.entity.position.x, roundedBotPosition.y - 0.5, bot.entity.position.z));
+  isOverLiquid = (liquidBelow && (liquidBelow.name === 'water' || liquidBelow.name === 'lava'));
 
-  const liquidBoundary = bot.blockAt(bot.entity.position.offset(0, -0.001, 0));
+  const liquidBoundary = bot.blockAt(bot.entity.position);
   if (bot.entity.isInWater || bot.entity.isInLava || liquidBoundary.name === 'water' || liquidBoundary.name === 'lava') {
-    isJesusing = true;
-    //renderChatBox(bot.entity.position)
-    bot.entity.velocity.set(bot.entity.velocity.x,0.11,bot.entity.velocity.z);
+    isTouchingLiquid = true;
 
+    bot.entity.velocity.set(bot.entity.velocity.x,0.11,bot.entity.velocity.z);
     bot.setControlState('jump', false);
-    //bot.setControlState('sprint', false);
   } else {
-    isJesusing = false;
+    isTouchingLiquid = false;
   }
 }
 function strafeMovement(entity) {
   const entityPos = [entity.position.x,entity.position.z];
 
   const entityCloseToWebBlock = entityWebBlock[0] && entityWebBlock[0].distanceTo(entity.position) <= 1.5;
-  const botCloseToWebBlock = botWebBlock[0] && botWebBlock[0].distanceTo(bot.entity.position) < 1.1;
+  const botCloseToWebBlock = botWebBlock[0] && botWebBlock[0].distanceTo(bot.entity.position) <= 1.1;
   bot.pvp.followRange = (entityCloseToWebBlock || botCloseToWebBlock) ? 2 : 5;
 
-  if (!isInLiquid && bot.entity.onGround && bot.entity.position.distanceTo(entity.position) <= bot.pvp.followRange && bot.pvp.followRange === 5) {
+  if (!isOverLiquid && bot.entity.onGround && bot.entity.position.distanceTo(entity.position) <= bot.pvp.followRange && bot.pvp.followRange === 5) {
     if (!entityWebBlock[0]) {
       strafe(entityPos, 30, 0.6);
     } else {
@@ -640,10 +647,9 @@ function strafeMovement(entity) {
     }
   }
 }
-// Вы были телепортированы в Lobby. Причина: Timed out
 function strafe(position,angleDegrees,speed) {
   const [velocityX,velocityZ] = getStrafeVelocity(position,angleDegrees,speed);
-  if (bot.entity.onGround && !isJesusing && !isInLiquid) {
+  if (bot.entity.onGround && !isTouchingLiquid && !isOverLiquid) {
     bot.entity.velocity.set(velocityX,0.42,velocityZ);
     //bot.setControlState('forward', false);
   }
@@ -819,17 +825,17 @@ function getItemCount(itemId) {
     .reduce((acc, item) => acc + item.count, 0);
 }
 /*
-  FUNCTIONS: RESET
+  FUNCTIONS: MISC
 */
-function resetCombat() {
+async function resetCombat() {
   bot.pvp.forceStop();
   bot.pathfinder.setGoal(null);
+  await bot.waitForTicks(3);
   renderChatBox(`${status.ok}Reset completed`);
 }
 /*
-  FUNCTIONS: COMBAT INVENTORY MANAGMENT
+  FUNCTIONS: COMBAT INVENTORY/SLOT MANAGEMENT
 */
-//let isEquippingArmor = false
 async function equipArmor() {
   if (lockValue['armor']) return;
   lockValue['armor'] = true;
@@ -845,7 +851,7 @@ async function equipArmor() {
       if (bot.inventory.slots[equipSlot] === null || bot.inventory.slots[equipSlot].type != piece.item.type) {
         lockValue['hand'] = true;
         lockValue['off-hand']  = true;
-        await bot.waitForTicks(5);
+        //await bot.waitForTicks(2);
         await equipItem(piece.item.type, piece.destination);
         lockValue['hand'] = false;
         lockValue['off-hand']  = false;
@@ -857,7 +863,7 @@ async function equipArmor() {
 async function equipGapple() {
   if (lockValue['gapple']) return;
   lockValue['gapple'] = true;
-  if (((bot.health + bot.entity?.metadata[11]) <= 20 && bot.pvp.target || (bot.health + bot.entity?.metadata[11]) <= 19.9) && (((bot.health + bot.entity?.metadata[11]) > 3+deltaHealth && getItemCount('totem_of_undying') >= 1) || (getItemCount('totem_of_undying') === 0))) {
+  if (((bot.health + bot.entity?.metadata[11]) <= 20 && bot.pvp.target || (bot.health + bot.entity?.metadata[11]) <= 19.9) && (((bot.health + bot.entity?.metadata[11]) > options.healthOffset+deltaHealth && getItemCount('totem_of_undying') >= 1) || (getItemCount('totem_of_undying') === 0))) {
     const gapple = bot.inventory.findInventoryItem(bot.registry.itemsByName.golden_apple.id, null) || bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')];
     if (gapple && gapple?.type === bot.registry.itemsByName.golden_apple.id) {
       isHealing = true;
@@ -866,7 +872,6 @@ async function equipGapple() {
       renderChatBox(`${status.gapple}${status.info}STARTED Healing function`);
 
       if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != gapple.type) {
-        await bot.waitForTicks(3);
         await equipItem(gapple.type, 'off-hand');
       }
 
@@ -875,8 +880,7 @@ async function equipGapple() {
       bot.deactivateItem();
 
       const newItemCount = getItemCount('golden_apple');
-      const cooldown = 14;
-      handleCooldown(cooldown, 'gapple');
+      handleCooldown(options.itemCooldown, 'gapple');
       if (newItemCount < oldItemCount || bot.entity.effects[10]) {
         renderChatBox(`${status.gapple}${status.ok}Gapple SUCCESS`);
       } else {
@@ -889,47 +893,46 @@ async function equipGapple() {
   lockValue['gapple'] = false;
 }
 async function equipBuff() {
-  if (lockValue['buff']) return;
+  if (lockValue['buff'] || bot.entity.effects['5']) return;
   lockValue['buff'] = true;
-  if (!bot.entity.effects['5'] && ((bot.health + bot.entity?.metadata[11]) >= 19 || (bot.health + bot.entity?.metadata[11]) > 10 && cooldown['gapple'].time >= 5)) {
-    const buff = bot.inventory.findInventoryItem(bot.registry.itemsByName.potion.id, null);
-    if (buff?.nbt && buff && bot.pvp.target && nbt.simplify(buff.nbt).Potion === 'minecraft:strong_strength') {
-      lockValue['off-hand'] = true;
-      const oldItemCount = getItemCount('potion');
-      renderChatBox(`${status.buff}${status.info}Buff STARTED`);
+  
+  const health = bot.health + bot.entity?.metadata[11];
+  const canBuff = health >= 19 || (health > 10 && cooldown['gapple'].time >= 5);
+  const buff = bot.inventory.findInventoryItem(bot.registry.itemsByName.potion.id, null);
+ 
+  if (canBuff && buff?.nbt && bot.pvp.target && nbt.simplify(buff.nbt).Potion === 'minecraft:strong_strength') {
+    lockValue['off-hand'] = true;
+    const oldCount = getItemCount('potion');
+    renderChatBox(`${status.buff}${status.info}Buff STARTED`);
 
-      if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != buff.type) {
-        await bot.waitForTicks(3);
-        await equipItem(buff.type, 'off-hand');
-      }
-
-      bot.activateItem(true);
-      await bot.waitForTicks(35);
-      bot.deactivateItem();
-
-      const newItemCount = getItemCount('potion');
-      handleCooldown(14, 'buff');
-      if (newItemCount < oldItemCount || bot.entity.effects['5']) {
-        renderChatBox(`${status.buff}${status.ok}Buff SUCCESS`);
-      } else {
-        renderChatBox(`${status.buff}${status.error}Buff FAILED`);
-      }
-      lockValue['off-hand'] = false;
+    if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != buff.type) {
+      await equipItem(buff.type, 'off-hand');
     }
+
+    bot.activateItem(true);
+    await bot.waitForTicks(35);
+    bot.deactivateItem();
+
+    const newCount = getItemCount('potion');
+    handleCooldown(options.itemCooldown, 'buff');
+    const buffStatus = newCount < oldCount || bot.entity.effects['5'] ? `${status.ok}Buff SUCCESS` : `${status.error}Buff FAILED`;
+    renderChatBox(`${status.buff}${buffStatus}`);
+
+    lockValue['off-hand'] = false;
   }
   lockValue['buff'] = false;
 }
 async function equipTotem() {
   if (lockValue['totem']) return;
   lockValue['totem'] = true;
-  if (((bot.health + bot.entity?.metadata[11]) <= 3+deltaHealth || getItemCount('golden_apple') === 0) && bot.inventory.slots[45]?.type != bot.registry.itemsByName.totem_of_undying.id) {
+
+  if (((bot.health + bot.entity?.metadata[11]) <= options.healthOffset+deltaHealth || getItemCount('golden_apple') === 0) && bot.inventory.slots[45]?.type != bot.registry.itemsByName.totem_of_undying.id) {
     const totem = bot.inventory.findInventoryItem(bot.registry.itemsByName.totem_of_undying.id, null);
     if (totem) {
       lockValue['off-hand'] = true;
-      renderChatBox(`${status.totem}`);
-      await bot.waitForTicks(3);
+      renderChatBox(`${status.totem}S`);
       await equipItem(totem.type, 'off-hand');
-      renderChatBox(`${status.totem}`);
+      renderChatBox(`${status.totem}E`);
       lockValue['off-hand'] = false;
     }
   }
@@ -938,42 +941,48 @@ async function equipTotem() {
 async function tossPearl() {
   if (lockValue['pearl']) return;
   lockValue['pearl'] = true;
-  const entity = bot.nearestEntity(e => e.type === 'player' && e.username === bot.pvp.target?.username);
+
+  const entity = bot.nearestEntity(e => e.type === 'player' && e.username === bot.pvp.target?.username && e.position.distanceTo(bot.entity.position) >= 10);
   const pearl = bot.inventory.findInventoryItem(bot.registry.itemsByName.ender_pearl.id, null);
+  const blockingEntity = bot.entityAtCursor(3.5);
 
-  if (pearl && entity && (entity?.position.distanceTo(bot.entity.position) >= 10 || bot.player.isInWater || bot.player.isInLava || bot.player.isInWeb) && cooldown['pearl'].time === 0) {
-    renderChatBox(`${status.pearl}${status.ok}Pearl conditions met`);
-    lockValue['off-hand'] = true;
-    isHunting = false;
-    resetCombat();
-
-    const angleInBlocks = getPearlTrajectory(entity.position.distanceTo(bot.entity.position));
-    const oldItemCount = getItemCount('ender_pearl');
-
-    if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != pearl.type) {
-      await bot.waitForTicks(3);
-      await equipItem(pearl.type, 'off-hand');
-    }
-
-    bot.pathfinder.setGoal(null);
-    bot.pvp.forceStop();
-
-    await bot.lookAt(entity.position.offset(0,angleInBlocks+0.8,0), true);
-    await bot.waitForTicks(5);
-    bot.activateItem(true);
-    await bot.waitForTicks(2);
-    bot.deactivateItem();
-
-    const newItemCount = getItemCount('ender_pearl');
-    handleCooldown(14, 'pearl');
-    if (newItemCount < oldItemCount) {
-      renderChatBox(`${status.pearl}${status.ok}Pearl SUCCESS`);
-    } else {
-      renderChatBox(`${status.pearl}${status.error}Pearl FAILED`);
-    }
-    isHunting = true;
-    lockValue['off-hand'] = false;
+  if (!pearl || !entity || cooldown['pearl'].time > 0) {
+    lockValue['pearl'] = false;
+    return;
+  } else if (blockingEntity) {
+    renderChatBox(`${status.pearl}${status.warn}Entity is blocking the pearl path! ${blockingEntity.username}`)
+    lockValue['pearl'] = false;
+    return;
   }
+
+  renderChatBox(`${status.pearl}${status.ok}Pearl conditions met`);
+  lockValue['off-hand'] = true;
+  isHunting = false;
+  bot.pvp.forceStop();
+
+  const angleInBlocks = getPearlTrajectory(entity.position.distanceTo(bot.entity.position));
+  const oldCount = getItemCount('ender_pearl');
+
+  if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != pearl.type) {
+    await equipItem(pearl.type, 'off-hand');
+  }
+
+  bot.pathfinder.setGoal(null);
+  bot.pvp.forceStop();
+
+  await bot.lookAt(entity.position.offset(0,angleInBlocks+0.8,0), true);
+  await bot.waitForTicks(5);
+  bot.activateItem(true);
+  await bot.waitForTicks(2);
+  bot.deactivateItem();
+
+  const newCount = getItemCount('ender_pearl');
+  handleCooldown(options.itemCooldown, 'pearl');
+  const tossStatus = newCount < oldCount ? `${status.ok}Pearl SUCCESS` : `${status.error}Pearl FAILED`;
+  renderChatBox(`${status.pearl}${tossStatus}`);
+
+  isHunting = true;
+  lockValue['off-hand'] = false;
   lockValue['pearl'] = false;
 }
 async function equipPassive() {
@@ -987,10 +996,9 @@ async function equipPassive() {
     if (piece.item && piece.slotCheck?.type != piece.item.type) {
       if ((piece.slotUsed === 'off-hand' || piece.item.enchants.length >= 8) && !lockValue[piece.slotUsed]) {
         lockValue[piece.slotUsed] = true;
-        renderChatBox(`${status.passive}${piece.item.displayName}`);
-        await bot.waitForTicks(3);
+        renderChatBox(`${status.passive}${piece.item.displayName} S`);
         await equipItem(piece.item.type, piece.slot);
-        renderChatBox(`${status.passive}${piece.item.displayName}`);
+        renderChatBox(`${status.passive}${piece.item.displayName} E`);
         lockValue[piece.slotUsed] = false;
       }
     }
@@ -998,6 +1006,8 @@ async function equipPassive() {
   lockValue['passive'] = false;
 }
 async function tossJunk() {
+  if (lockValue['junk']) return;
+  lockValue['junk'] = true;
   const junkArray = [
     bot.inventory.findInventoryItem(bot.registry.itemsByName.compass.id, null), 
     bot.inventory.findInventoryItem(bot.registry.itemsByName.knowledge_book.id, null),
@@ -1005,20 +1015,15 @@ async function tossJunk() {
   ];
   for (const item of junkArray) {
     if (item) {
-      strikeValue['junk']++;
-      if (strikeValue['junk'] >= 2) {
-        await bot.waitForTicks(5);
-        strikeValue['junk'] = 0;
-        return;
-      }
       lockValue['hand'] = true;
       lockValue['off-hand'] = true;
-      await bot.waitForTicks(3);
+      //await bot.waitForTicks(3);
       await tossItem(item.type, item.count);
       lockValue['hand'] = false;
       lockValue['off-hand'] = false;
     }
   }
+  lockValue['junk'] = false;
 }
 /*
   FUNCTIONS: RESTORE LOADOUT
@@ -1066,49 +1071,51 @@ function huntPlayer() {
   const filterEntity = (() => {
     switch (combatMode) {
       case 0:
-        return e => e.type === 'mob' && e.position.distanceTo(bot.entity.position) <= 64 && e.kind === 'Hostile mobs';
+        return e => e.type === 'mob' && e.position.distanceTo(bot.entity.position) <= 128 && e.kind === 'Hostile mobs';
       case 1:
-        return e => e.type === 'player' && e.position.distanceTo(bot.entity.position) <= 64 && bot.players[e.username]?.gamemode === 0 && !allies.includes(e.username);
+        return e => e.type === 'player' && e.position.distanceTo(bot.entity.position) <= 128 && bot.players[e.username]?.gamemode === 0 && !allies.includes(e.username);
       case 2:
         return e => e.type === 'player' &&
                     (isInCylinder([e.position.x, e.position.y, e.position.z], cylinder1) || 
                      isInCylinder([e.position.x, e.position.y, e.position.z], cylinder2)) &&
-                    e.position.distanceTo(bot.entity.position) <= 64 &&
+                    e.position.distanceTo(bot.entity.position) < 128 &&
                     bot.players[e.username]?.gamemode === 0 && 
                     !allies.includes(e.username);
       case 3:
         return e => e.type === 'player' && 
-                    e.position.distanceTo(bot.entity.position) <= 64 &&
+                    e.position.distanceTo(bot.entity.position) <= 128 &&
                     e.username === master;
     }
   })();
   const entity = bot.nearestEntity(filterEntity);
   if (entity) { 
-    if ((isInLiquid || isJesusing || bot.entity.isInWeb) && !bot.pathfinder.isMoving()) {
-      renderChatBox(`${status.debug} ${isInLiquid || isJesusing} ${bot.pathfinder.isMoving()}`);
+    if ((isOverLiquid) && !bot.pathfinder.isMoving()) {
       bot.setControlState('forward', true);
     }
     if (bot.entity.isInWeb) bot.setControlState('jump', false);
+
     strafeMovement(entity);
+
     if (entity.position.distanceTo(bot.entity.position) <= bot.pvp.attackRange) {
       if (entity.elytraFlying) {
         bot.lookAt(entity.position.offset(0,0,0), true);
       } else if (entity.isInWater || entity.isInLava) {
         bot.lookAt(entity.position.offset(0,entity.height,0), true);
-      } else {
+      } else if (!(isOverLiquid && bot.pathfinder.isMoving())){
         bot.lookAt(entity.position.offset(0,1,0), true);
       }
     }
     bot.pvp.attack(entity);
-    // if in  x seconds delta position less than 1-2 blocks: reset velocity
+    // if in x seconds delta position less than 1-2 blocks: reset velocity
   } else { 
     bot.pvp.forceStop();
+    bot.clearControlStates();
   }
 }
 /*
   FUNCTION LOOP 
 */
-bot.on('physicsTick', async () => {
+async function functionLoop() {
   if (!isWindowLocked || !isAutoEquipping) return;
   jesusOnLiquid();
   // HIGHEST PRIORITY
@@ -1120,20 +1127,22 @@ bot.on('physicsTick', async () => {
     if (!lockValue['pearl'] && cooldown['pearl'].time === 0 && !cooldown['pearl'].lock) tossPearl(); // OFFHAND
   }
   // HIGH PRIORITY
-  if (!isHealing && !lockValue['hand'] && !lockValue['off-hand'] && (bot.health+bot.entity?.metadata[11]) > 3+deltaHealth) {
+  if (!isHealing && !lockValue['hand'] && !lockValue['off-hand'] && (bot.health+bot.entity?.metadata[11]) > options.healthOffset+deltaHealth) {
     if (!lockValue['passive']) equipPassive(); // MAIN HAND
     if (!lockValue['junk'] && cooldown['pvp'].time === 0) tossJunk(); // MAIN HAND
   }
   // LOW PRIORITY
   if (isHunting) huntPlayer();
-});
+}
 setInterval(() => {
   if (!isWindowLocked || !isAutoEquipping) return;
   updateWebBlocks();
 }, 500);
-setInterval(() => {
+/* Velocity checks and unstucks */
+setInterval(async () => {
   if (!isWindowLocked || !isAutoEquipping) return;
   resetVelocity();
+  await unstuck();
 }, 1500);
 setInterval(() => {
   if (!isWindowLocked) return;
@@ -1146,71 +1155,119 @@ setInterval(() => {
   const banner =
   `BOT ${bot.username} ${rateIntValue(36,(bot.health+bot.entity?.metadata[11]))} ${combatMode} ` +
   `TARGET ${bot.pvp.target?.username} ${rateIntValue(36,(bot.pvp.target?.metadata[7]+bot.pvp.target?.metadata[11]))} ${isInCylinder(targetPos,cylinder1) || isInCylinder(targetPos,cylinder2) ? status.good+'true{/}' : status.bad+'false{/}'} ` +
-  `DIST ${rateIntValue(10,bot.pvp.target?.position.distanceTo(bot.entity.position))} ${bot.pvp.followRange}\n` +
+  `DIST ${rateIntValue(10,bot.pvp.target?.position.distanceTo(bot.entity.position))} ${bot.pvp.followRange} ${rateBoolValue(bot.pathfinder.isMoving())}\n` +
   `DHEALTH ${rateIntValue(5,deltaHealth)} ` +
   // INVENTORY
   `PEARL ${rateIntValue(32,getItemCount('ender_pearl'))} BUFF ${rateIntValue(5,getItemCount('potion'))} TOTEM ${rateIntValue(8,getItemCount('totem_of_undying'))} GAPPLE ${rateIntValue(64,getItemCount('golden_apple'))} ` + 
   `ARMOR ${rateIntValue(6,getItemCount('diamond_helmet'))}|${rateIntValue(6,getItemCount('diamond_chestplate'))}|${rateIntValue(6,getItemCount('diamond_leggings'))}|${rateIntValue(6,getItemCount('diamond_boots'))} ` +
   `ARMOR% ${rateIntValue(100,helmetPerc)}|${rateIntValue(100,chestplatePerc)}|${rateIntValue(100,leggingsPerc)}|${rateIntValue(100,bootsPerc)}\n` +
   // COMBAT INDICATORS
-  `HIT ${cooldown['hit']?.lock ? status.bad+(cooldown['hit']?.time ?? 0).toFixed(2) : status.good+(cooldown['hit']?.time ?? 0).toFixed(2)}{/} PVP ${cooldown['pvp']?.lock ? status.bad+(cooldown['pvp']?.time ?? 0).toFixed(2) : status.good+(cooldown['pvp']?.time ?? 0).toFixed(2)}{/} BUFF ${cooldown['buff']?.lock ? status.bad+(cooldown['buff']?.time ?? 0).toFixed(2) : status.good+(cooldown['buff']?.time ?? 0).toFixed(2)}{/} GAPPLE ${cooldown['gapple']?.lock ? status.bad+(cooldown['gapple']?.time ?? 0).toFixed(2) : status.good+(cooldown['gapple']?.time ?? 0).toFixed(2)}{/} PEARL ${cooldown['pearl']?.lock ? status.bad+(cooldown['pearl']?.time ?? 0).toFixed(2) : status.good+(cooldown['pearl']?.time ?? 0).toFixed(2)}{/} ` +
+  `PVP ${rateComboValue(cooldown['pvp']?.lock, cooldown['pvp']?.time, true)} BUFF ${rateComboValue(cooldown['buff']?.lock, cooldown['buff']?.time, true)} GAPPLE ${rateComboValue(cooldown['gapple']?.lock, cooldown['gapple']?.time, true)} PEARL ${rateComboValue(cooldown['pearl']?.lock, cooldown['pearl']?.time, true)} ` +
   `HAND ${rateBoolValue(lockValue['hand'],true)} OFF-HAND ${rateBoolValue(lockValue['off-hand'],true)}\n` +
   `HSR ${rateIntValue(100,((pvpHitSuccess/pvpHitAttempts)*100))} ` +
-  `JESUS isInLiquid ${rateBoolValue(isInLiquid)} isJesusing ${rateBoolValue(isJesusing)} ` + 
+  `JESUS isOver ${rateBoolValue(isOverLiquid)} isTouching ${rateBoolValue(isTouchingLiquid)} ` + 
   `STRAFE RDY ${rateBoolValue(bot.entity.onGround)} ` + 
   `CONTROL ${rateBoolValue(bot.getControlState('forward'))} ${rateBoolValue(bot.getControlState('sprint'))} ${rateBoolValue(bot.getControlState('jump'))} `
   renderFunctionBox(banner);
 }, 50);
 /*
-  bot.on() EVENT TRIGGERS
-*/ // Sheikh ??????? IP selfharm ('37.214.23.240') ?? 'osn na nacionalnoi po4ve'.
-inputBox.on('submit', async (data) => cliCommands(data));
-bot.on('messagestr', (data) => logAbnormalities(data));
-bot.on('message', async (data) => chatCommands(data)); 
-bot.on('windowOpen', async (window) => {
-  if (isWindowLocked) return;
-  await bot.clickWindow(0,0,0);
-  await window.close();
-});
-bot.on('path_reset', (path) => unstuck(path));
-bot.on('scoreRemoved', () => {
-  if (cooldown['pvp'].lock || !bot.players[master]) return;
-  const dynamicKeyRegex = /^\s*.*Денег:.*\$$/;
-  const dynamicKey = Object.keys(bot.scoreboards.JampireBoard.itemsMap).find(key => dynamicKeyRegex.test(key));
-  const match = /\d+/.exec(bot.scoreboards.JampireBoard.itemsMap[dynamicKey]?.name.toString());
-  const value = match ? match[0] : null;
-  if (value > 0) bot.chat(`/pay ${master} ${value}`);
-});
-bot.on('attackedTarget', () => { pvpHitAttempts++; });
-bot.on('entityHurt', (entity) => {
-  entity.username === bot.pvp.target?.username && pvpHitSuccess++
-  if (entity.username === bot.username) {
-    if (oldHealth === 0) {
-      oldHealth = (bot.health+bot.entity?.metadata[11]);
-    } else if (oldHealth != 0) {
-      newHealth = (bot.health+bot.entity?.metadata[11]);
-      if ((oldHealth-newHealth) > 1) deltaHealth = oldHealth-newHealth;
-      oldHealth = 0;
-      newHealth = 0;
+  CLIENT RELATED EVENT HANDLERS
+*/
+function startClient() {
+  const t0 = performance.now();
+  bot = mineflayer.createBot(config);
+  bot.once('inject_allowed', () => {
+    bot.setMaxListeners(99999);
+  
+    bot.loadPlugin(pathfinder);
+    bot.loadPlugin(pvp);
+    bloodhoundPlugin(bot);
+  
+    bot.pathfinder.thinkTimeout = 5000;
+    bot.pathfinder.tickTimeout = 40;
+    //bot.pathfinder.searchRadius = 64;
+  
+    bot.bloodhound.yaw_correlation_enabled = true;
+    /* Movement rules */
+    bot.pvp.movements.infiniteLiquidDropdownDistance = true;
+    bot.pvp.movements.allowEntityDetection = true;
+    bot.pvp.movements.allowFreeMotion = true;
+    bot.pvp.movements.allowParkour = true;
+    bot.pvp.movements.maxDropDown = 256;
+  
+    bot.pvp.movements.allow1by1towers = false;
+    bot.pvp.movements.canOpenDoors = false;
+    bot.pvp.movements.canDig = false;
+  
+    bot.pvp.movements.scafoldingBlocks = [null];
+  
+    bot.pvp.attackRange = 4;
+    bot.pvp.followRange = 2;
+    /* bot.pvp.meleeAttackRate = new pvpLibrary.RandomTicks(10,11); */
+  
+    bot.pvp.viewDistance = 128;
+  });
+  //
+  bot.on('physicsTick', async () => await functionLoop());
+  bot.on('messagestr', (data) => logAbnormalities(data));
+  bot.on('message', async (data) => chatCommands(data)); 
+  bot.on('error', (err) => renderError(err));
+  bot.on('windowOpen', async (window) => {
+    if (isWindowLocked) return;
+    await bot.clickWindow(0,0,0);
+    await window.close();
+  });
+  bot.on('path_reset', async (path) => await unstuck(path));
+  bot.on('scoreRemoved', () => {
+    if (cooldown['pvp'].lock || !bot.players[master]) return;
+    const dynamicKeyRegex = /^\s*.*Денег:.*\$$/;
+    const dynamicKey = Object.keys(bot.scoreboards.JampireBoard.itemsMap).find(key => dynamicKeyRegex.test(key));
+    const match = /\d+/.exec(bot.scoreboards.JampireBoard.itemsMap[dynamicKey]?.name.toString());
+    const value = match ? match[0] : null;
+    if (value > 0) bot.chat(`/pay ${master} ${value}`);
+  });
+  bot.on('attackedTarget', () => { pvpHitAttempts++; });
+  bot.on('entityHurt', (entity) => {
+    entity.username === bot.pvp.target?.username && pvpHitSuccess++
+    if (entity.username === bot.username) {
+      if (oldHealth === 0) {
+        oldHealth = (bot.health+bot.entity?.metadata[11]);
+      } else if (oldHealth != 0) {
+        newHealth = (bot.health+bot.entity?.metadata[11]);
+        if ((oldHealth-newHealth) > 1) deltaHealth = oldHealth - newHealth;
+        oldHealth = 0;
+        newHealth = 0;
+      }
     }
-  }
-});
-bot.on('particle', (particle) => {
-  const floorParticle = floorVec3(particle.position);
-  const floorBot = floorVec3(bot.entity.position);
-  if (particle.id === 45 && floorParticle.x === floorBot.x && floorParticle.y === floorBot.y && floorParticle.z === floorBot.z) {
-    renderChatBox(`${status.pvp}${status.info}Critical hit from bot`);
-  }
-})
-bot.on('death', async() => {
-  renderChatBox(`${status.info}${bot.username} has died, waiting for ${Math.ceil((cooldown['pvp'].time ?? 1) *20)} ticks`);
-  resetCombat();
-  await bot.waitForTicks(Math.ceil((cooldown['pvp'].time ?? 1)*20 + 5));
-  await restoreLoadout();
-  const zoneArray = ['',2,4];
-  const zone = Math.floor(Math.random() * zoneArray.length);
-  if (combatMode === 2) bot.chat(`/warp play${zoneArray[zone]}`); else bot.chat(`/home home`);
-});
+  });
+  bot.on('particle', (particle) => {
+    const floorParticle = floorVec3(particle.position);
+    const floorBot = floorVec3(bot.entity.position);
+    if (particle.id === 45 && floorParticle.x === floorBot.x && floorParticle.y === floorBot.y && floorParticle.z === floorBot.z) {
+      renderChatBox(`${status.pvp}Critical hit from bot`);
+    }
+  })
+  bot.on('death', async() => {
+    renderChatBox(`${status.info}${bot.username} has died, waiting for ${Math.ceil((cooldown['pvp'].time ?? 1) *20)} ticks`);
+    resetCombat();
+    await bot.waitForTicks(Math.ceil((cooldown['pvp'].time ?? 1)*20 + 5));
+    await restoreLoadout();
+    const zoneArray = ['',2,4,3];
+    const zone = Math.floor(Math.random() * zoneArray.length);
+    if (combatMode === 2) bot.chat(`/warp play${zoneArray[zone]}`); else bot.chat(`/home home`);
+  });
+  bot.on('end', (reason) => {
+    renderChatBox(`${status.error}Bot ended ${reason}, attempting to recover...`);
+    startClient();
+  });
+  const t1 = performance.now();
+  renderChatBox(`${status.ok}All event handlers initialized in ${(t1 - t0).toFixed(2)}ms`);
+}
+/*
+  NON CLIENT RELATED EVENT HANDLERS
+*/
+process.on('uncaughtException', (err) => renderError(err));
+process.on('warning', (err) => renderError(err));
 
 screen.key(['C-z'], () => logBox.focus());
 screen.key(['C-x'], () => chatBox.focus());
@@ -1222,7 +1279,8 @@ screen.key(['escape'], () => {
   bot.end();
   process.exit(0);
 });
+
+inputBox.on('submit', async (data) => cliCommands(data));
 inputBox.key(['tab'], () => getTabComplete());
-bot.on('error', (err) => renderError(err));
-process.on('uncaughtException', (err) => renderError(err));
-process.on('warning', (err) => renderError(err));
+
+startClient();
