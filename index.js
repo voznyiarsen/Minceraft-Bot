@@ -26,13 +26,18 @@ const username = process.argv[3];
 const password = process.argv[4]; 
 const master = process.argv[5];
 
+if (process.argv.length < 6) {
+  console.log('Usage index.js [host] [username] [password] [master]');
+  process.exit(1);
+}
+
 const config = {
   host: host,
   port: '25565',
   username: username,
   logErrors: false,
   hideErrors: true,
-  checkTimeoutInterval: 60*1000,
+  //checkTimeoutInterval: 15*1000,
   version: '1.12.2'
 }
 // store options here instead of hardcoding it
@@ -58,10 +63,14 @@ const status = {
   ok: '{green-bg}{black-fg}OKAY{/} ',
   verbose: '{cyan-bg}{black-fg}VERBOSE{/} ',
   pvp: '{red-bg}{white-fg}PVP{/} ',
-  hit: '{red-bg}{white-fg}HIT{/}'
+  hurt: '{red-bg}{white-fg}HURT{/} '
 };
 
 let bot;
+
+let moneyValue
+let killValue
+let deathValue
 
 let isLogging = true;
 let isAutoEquipping = true;
@@ -114,7 +123,7 @@ const nbtBlock =
 {BOOTS: bootsNbt, LEGGINGS: leggingsNbt, CHESTPLATE: chestplateNbt, HELMET: helmetNbt, SWORD: swordNbt, POTION: potionNbt, NONE: null};
 
 const cooldown = {};
-const cooldownTypes = ['pvp','gapple','pearl','buff','hit']
+const cooldownTypes = ['pvp','gapple','pearl','buff','hurt']
 for (const type of cooldownTypes) cooldown[type] = {time: 0, lock: false};
 
 const lockValue = {};
@@ -445,7 +454,7 @@ async function cliCommands(data) {
         renderChatBox(`${status.ok}Item found`);
         renderChatBox(util.inspect(item, true, null, true));
       } else {
-        renderChatBox(`${status.warn}No entry of item is slot ${command[1]} found`);
+        renderChatBox(`${status.warn}No entry of item in slot ${command[1]} found`);
       }
     }
     break;
@@ -472,14 +481,14 @@ async function cliCommands(data) {
   FUNCTIONS: TIMERS
 */
 async function handleCooldown(value, type) {
-  cooldown[type].time = value > 0 ? value : cooldown[type].time + 0.99;
-  if (type != 'pvp') renderChatBox(`${status[type]}${status.info}Cooldown for ${type} started, ${cooldown[type].time}s left`);
+  cooldown[type].time = value > 0 ? value : cooldown[type].time + 1;
+  if (type != 'pvp' && type != 'hurt') renderChatBox(`${status[type]}${status.info}Cooldown for ${type} started, ${cooldown[type].time}s left`);
   cooldown[type].time = parseInt(cooldown[type].time, 10);
   if (!cooldown[type].lock) {
     cooldown[type].lock = true;
     while (cooldown[type].time > 0) {
-      cooldown[type].time -= 0.1;
-      await bot.waitForTicks(2);
+      cooldown[type].time -= 0.25;
+      await bot.waitForTicks(5);
     }
   }
   if (cooldown[type].time <= 0 && cooldown[type].lock === true){
@@ -487,6 +496,12 @@ async function handleCooldown(value, type) {
     cooldown[type].lock = false;
     renderChatBox(`${status[type]}${status.info}Cooldown for ${type} ended, [TIME: ${cooldown[type].time} LOCK: ${cooldown[type].lock}]`);
   }
+}
+function getScoreBoardInfo(regex) {
+  const dynamicKey = Object.keys(bot.scoreboards.JampireBoard.itemsMap).find(key => regex.test(key));
+  const match = /\d+/.exec(bot.scoreboards.JampireBoard.itemsMap[dynamicKey]?.name.toString());
+  const value = match ? match[0] : null;
+  return value;
 }
 /*
   FUNCTIONS: CALCULATIONS
@@ -514,24 +529,19 @@ function getPearlTrajectory(distance) {
   if (Math.abs(sineTheta) > 1) throw new Error(`${status.error}Distance too far for initial velocity.`);
   return distance * Math.sin(0.5 * Math.asin(sineTheta));
 }
-function rateIntValue(max, current, reverse) {
-  const percentage = (parseInt(current, 10) / parseInt(max, 10)) * 100;
-  const roundedCurrent = Math.round(current);
-  const statusType = reverse ? 
-    (percentage > 66 ? "bad" : percentage > 33 ? "mediocre" : "good"):
-    (percentage > 66 ? "good" : percentage > 33 ? "mediocre" : "bad");
+function rateBoolValue(currentBool, isReverse) {
+  const statusType = isReverse ? (currentBool ? "bad" : "good") : (currentBool ? "good" : "bad");
+  return `${status[statusType]}${currentBool}{/}`;
+}
+function rateIntValue(currentInt, maxInt, pctCurve, isReverse) {
+  const [pctBoundaryOne, pctBoundaryTwo] = pctCurve || [66.66, 33.33];
+  const percentage = (parseInt(currentInt, 10) / parseInt(maxInt, 10)) * 100;
+  const roundedCurrent = Math.round(currentInt * 100) / 100;
+  const statusType = isReverse ? 
+    (percentage > pctBoundaryOne ? "bad" : percentage > pctBoundaryTwo ? "mediocre" : "good"):
+    (percentage > pctBoundaryOne ? "good" : percentage > pctBoundaryTwo ? "mediocre" : "bad");
   return `${status[statusType]}${roundedCurrent}{/}`;
 }
-function rateBoolValue(current, reverse) {
-  const statusType = reverse ? (current ? "bad" : "good") : (current ? "good" : "bad");
-  return `${status[statusType]}${current}{/}`;
-}
-function rateComboValue(currentBool, currentInt, reverse) {
-  const statusType = reverse ? (currentBool ? "bad" : "good") : (currentBool ? "good" : "bad");
-  return `${status[statusType]}${currentInt.toFixed(2)}{/}`;
-}
-const adjustVelocity = (value, boundary) => Math.max(-boundary, Math.min(value, boundary));
-
 function floorVec3(vec3) {
   return {
       x: Math.floor(vec3.x),
@@ -546,7 +556,7 @@ function roundVec3(vec3) {
       z: Math.round(vec3.z)
   };
 }
-function getMidpoint(point1,point2) {
+function getMidpointVec3(point1,point2) {
   return {
     x: (point1.x + point2.x) / 2,
     y: (point1.y + point2.y) / 2,
@@ -592,8 +602,7 @@ function updateWebBlocks() {
 */
 function resetVelocity() {
   if ((isOverLiquid || isTouchingLiquid) && !bot.pathfinder.isMoving()) {
-    // retard mode but works?
-    //renderChatBox(`${status.verbose}Velocity reset`);
+    // retard mode but works? rewrite this to include more logic vvv
     bot.entity.velocity.set(0,-0.08,0);
   }
 }
@@ -685,7 +694,7 @@ function formatCell(cell, index, type, columnWidths) {
       case bot.players[cell]?.gamemode === 1:
           return `{cyan-fg}${cell.padEnd(columnWidths[index])}{/}`;
       case !isNaN(cell):
-          return `{green-fg}${rateIntValue(100,cell.padEnd(columnWidths[index]),true)}{/}`;
+          return `{green-fg}${rateIntValue(cell.padEnd(columnWidths[index]), 200, null, true)}{/}`;
       default:
           return cell.padEnd(columnWidths[index]);
     }
@@ -861,7 +870,7 @@ async function equipArmor() {
   lockValue['armor'] = false;
 }
 async function equipGapple() {
-  if (lockValue['gapple']) return;
+  if (lockValue['gapple']) return; // if totem and low and hurt = 0s: heal
   lockValue['gapple'] = true;
   if (((bot.health + bot.entity?.metadata[11]) <= 20 && bot.pvp.target || (bot.health + bot.entity?.metadata[11]) <= 19.9) && (((bot.health + bot.entity?.metadata[11]) > options.healthOffset+deltaHealth && getItemCount('totem_of_undying') >= 1) || (getItemCount('totem_of_undying') === 0))) {
     const gapple = bot.inventory.findInventoryItem(bot.registry.itemsByName.golden_apple.id, null) || bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')];
@@ -871,13 +880,16 @@ async function equipGapple() {
       const oldItemCount = getItemCount('golden_apple');
       renderChatBox(`${status.gapple}${status.info}STARTED Healing function`);
 
-      if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != gapple.type) {
-        await equipItem(gapple.type, 'off-hand');
+      while (true) {
+        if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type === gapple.type) {
+          bot.activateItem(true);
+          await bot.waitForTicks(35);
+          bot.deactivateItem();
+          break;
+        } else {
+          await equipItem(gapple.type, 'off-hand');
+        }
       }
-
-      bot.activateItem(true);
-      await bot.waitForTicks(35);
-      bot.deactivateItem();
 
       const newItemCount = getItemCount('golden_apple');
       handleCooldown(options.itemCooldown, 'gapple');
@@ -905,13 +917,16 @@ async function equipBuff() {
     const oldCount = getItemCount('potion');
     renderChatBox(`${status.buff}${status.info}Buff STARTED`);
 
-    if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != buff.type) {
-      await equipItem(buff.type, 'off-hand');
+    while (true) {
+      if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type === buff.type) {
+        bot.activateItem(true);
+        await bot.waitForTicks(35);
+        bot.deactivateItem();
+        break;
+      } else {
+        await equipItem(buff.type, 'off-hand');
+      }
     }
-
-    bot.activateItem(true);
-    await bot.waitForTicks(35);
-    bot.deactivateItem();
 
     const newCount = getItemCount('potion');
     handleCooldown(options.itemCooldown, 'buff');
@@ -926,9 +941,9 @@ async function equipTotem() {
   if (lockValue['totem']) return;
   lockValue['totem'] = true;
 
-  if (((bot.health + bot.entity?.metadata[11]) <= options.healthOffset+deltaHealth || getItemCount('golden_apple') === 0) && bot.inventory.slots[45]?.type != bot.registry.itemsByName.totem_of_undying.id) {
+  if (((bot.health + bot.entity?.metadata[11]) <= options.healthOffset+deltaHealth || getItemCount('golden_apple') === 0)) {
     const totem = bot.inventory.findInventoryItem(bot.registry.itemsByName.totem_of_undying.id, null);
-    if (totem) {
+    if (totem && bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != totem.type) {
       lockValue['off-hand'] = true;
       renderChatBox(`${status.totem}S`);
       await equipItem(totem.type, 'off-hand');
@@ -963,18 +978,21 @@ async function tossPearl() {
   const angleInBlocks = getPearlTrajectory(entity.position.distanceTo(bot.entity.position));
   const oldCount = getItemCount('ender_pearl');
 
-  if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type != pearl.type) {
-    await equipItem(pearl.type, 'off-hand');
+  while (true) {
+    if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type === pearl.type) {
+      bot.pathfinder.setGoal(null);
+      bot.pvp.forceStop();
+
+      await bot.lookAt(entity.position.offset(0,angleInBlocks+0.8,0), true);
+      await bot.waitForTicks(5);
+      bot.activateItem(true);
+      await bot.waitForTicks(2);
+      bot.deactivateItem();
+      break;
+    } else {
+      await equipItem(pearl.type, 'off-hand');
+    }
   }
-
-  bot.pathfinder.setGoal(null);
-  bot.pvp.forceStop();
-
-  await bot.lookAt(entity.position.offset(0,angleInBlocks+0.8,0), true);
-  await bot.waitForTicks(5);
-  bot.activateItem(true);
-  await bot.waitForTicks(2);
-  bot.deactivateItem();
 
   const newCount = getItemCount('ender_pearl');
   handleCooldown(options.itemCooldown, 'pearl');
@@ -1006,7 +1024,7 @@ async function equipPassive() {
   lockValue['passive'] = false;
 }
 async function tossJunk() {
-  if (lockValue['junk']) return;
+  if (lockValue['junk'] || lockValue['off-hand'] || lockValue['hand']) return;
   lockValue['junk'] = true;
   const junkArray = [
     bot.inventory.findInventoryItem(bot.registry.itemsByName.compass.id, null), 
@@ -1089,32 +1107,32 @@ function huntPlayer() {
   })();
   const entity = bot.nearestEntity(filterEntity);
   if (entity) { 
-    if ((isOverLiquid) && !bot.pathfinder.isMoving()) {
-      bot.setControlState('forward', true);
-    }
+    if (isOverLiquid && !bot.pathfinder.isMoving()) bot.setControlState('forward', true);
     if (bot.entity.isInWeb) bot.setControlState('jump', false);
 
     strafeMovement(entity);
 
     if (entity.position.distanceTo(bot.entity.position) <= bot.pvp.attackRange) {
-      if (entity.elytraFlying) {
-        bot.lookAt(entity.position.offset(0,0,0), true);
-      } else if (entity.isInWater || entity.isInLava) {
-        bot.lookAt(entity.position.offset(0,entity.height,0), true);
-      } else if (!(isOverLiquid && bot.pathfinder.isMoving())){
-        bot.lookAt(entity.position.offset(0,1,0), true);
+      const yOffset = entity.elytraFlying ? 0 : entity.isInWater || entity.isInLava ? entity.height : (!isOverLiquid || !bot.pathfinder.isMoving()) ? 1 : 0;
+      if (yOffset !== 0 || !isOverLiquid || !bot.pathfinder.isMoving()) {
+        bot.lookAt(entity.position.offset(0, yOffset, 0), true);
       }
     }
+
     bot.pvp.attack(entity);
     // if in x seconds delta position less than 1-2 blocks: reset velocity
   } else { 
     bot.pvp.forceStop();
-    bot.clearControlStates();
   }
 }
 /*
   FUNCTION LOOP 
 */
+// TODO notes
+// heal when not hit for more than 3s 
+// use shield in between sword hit cooldowns
+// check y diff between bot and target, if distance is more than attack range: pearl
+// if 2 or more blocks in range of target: reduce/dont strafe
 async function functionLoop() {
   if (!isWindowLocked || !isAutoEquipping) return;
   jesusOnLiquid();
@@ -1134,42 +1152,39 @@ async function functionLoop() {
   // LOW PRIORITY
   if (isHunting) huntPlayer();
 }
-setInterval(() => {
-  if (!isWindowLocked || !isAutoEquipping) return;
-  updateWebBlocks();
-}, 500);
 /* Velocity checks and unstucks */
-setInterval(async () => {
+setInterval(async() => {
   if (!isWindowLocked || !isAutoEquipping) return;
   resetVelocity();
+  updateWebBlocks();
   await unstuck();
 }, 1500);
 setInterval(() => {
   if (!isWindowLocked) return;
-  const helmetPerc = (((363 - bot.inventory.slots[5]?.durabilityUsed) / 363) * 100);
-  const chestplatePerc = (((528 - bot.inventory.slots[6]?.durabilityUsed) / 528) * 100);
-  const leggingsPerc = (((495 - bot.inventory.slots[7]?.durabilityUsed) / 495) * 100);
-  const bootsPerc = (((429 - bot.inventory.slots[8]?.durabilityUsed) / 429) * 100);
-  const targetPos = [bot.pvp.target?.position.x,bot.pvp.target?.position.y,bot.pvp.target?.position.z];
+  const helmetPct = (((363 - bot.inventory.slots[5]?.durabilityUsed) / 363) * 100);
+  const chestplatePct = (((528 - bot.inventory.slots[6]?.durabilityUsed) / 528) * 100);
+  const leggingsPct = (((495 - bot.inventory.slots[7]?.durabilityUsed) / 495) * 100);
+  const bootsPct = (((429 - bot.inventory.slots[8]?.durabilityUsed) / 429) * 100);
+  const totalBotHealth = bot.health+bot.entity?.metadata[11] || 0;
+  const totalTargetHealth = bot.pvp.target?.metadata[7]+bot.pvp.target?.metadata[11] || 0;
+  const distTo = bot.pvp.target?.position.distanceTo(bot.entity.position) || 0;
 
   const banner =
-  `BOT ${bot.username} ${rateIntValue(36,(bot.health+bot.entity?.metadata[11]))} ${combatMode} ` +
-  `TARGET ${bot.pvp.target?.username} ${rateIntValue(36,(bot.pvp.target?.metadata[7]+bot.pvp.target?.metadata[11]))} ${isInCylinder(targetPos,cylinder1) || isInCylinder(targetPos,cylinder2) ? status.good+'true{/}' : status.bad+'false{/}'} ` +
-  `DIST ${rateIntValue(10,bot.pvp.target?.position.distanceTo(bot.entity.position))} ${bot.pvp.followRange} ${rateBoolValue(bot.pathfinder.isMoving())}\n` +
-  `DHEALTH ${rateIntValue(5,deltaHealth)} ` +
+  `BOT ${bot.username} ${rateIntValue(totalBotHealth, 36, [55,30])} MODE ${combatMode} ` +
+  `DeltaH ${rateIntValue(deltaHealth, 5)} ` +
+  `TARGET ${bot.pvp.target?.username || '----'} ${rateIntValue(totalTargetHealth, 36, [55,30], true)} ` +
+  `DistTo ${rateIntValue(distTo, 20, [50,25], true)}\n` +
   // INVENTORY
-  `PEARL ${rateIntValue(32,getItemCount('ender_pearl'))} BUFF ${rateIntValue(5,getItemCount('potion'))} TOTEM ${rateIntValue(8,getItemCount('totem_of_undying'))} GAPPLE ${rateIntValue(64,getItemCount('golden_apple'))} ` + 
-  `ARMOR ${rateIntValue(6,getItemCount('diamond_helmet'))}|${rateIntValue(6,getItemCount('diamond_chestplate'))}|${rateIntValue(6,getItemCount('diamond_leggings'))}|${rateIntValue(6,getItemCount('diamond_boots'))} ` +
-  `ARMOR% ${rateIntValue(100,helmetPerc)}|${rateIntValue(100,chestplatePerc)}|${rateIntValue(100,leggingsPerc)}|${rateIntValue(100,bootsPerc)}\n` +
+  `PEARL ${rateIntValue(getItemCount('ender_pearl'), 32)} BUFF ${rateIntValue(getItemCount('potion'), 5)} TOTEM ${rateIntValue(getItemCount('totem_of_undying'), 8)} GAPPLE ${rateIntValue(getItemCount('golden_apple'), 64)} ` + 
+  `ARMOR ${rateIntValue(getItemCount('diamond_helmet'), 6)}|${rateIntValue(getItemCount('diamond_chestplate'), 6)}|${rateIntValue(getItemCount('diamond_leggings'), 6)}|${rateIntValue(getItemCount('diamond_boots'), 6)} ` +
+  `ARMOR% ${rateIntValue(helmetPct, 100)}|${rateIntValue(chestplatePct, 100)}|${rateIntValue(leggingsPct, 100)}|${rateIntValue(bootsPct, 100)}\n` +
   // COMBAT INDICATORS
-  `PVP ${rateComboValue(cooldown['pvp']?.lock, cooldown['pvp']?.time, true)} BUFF ${rateComboValue(cooldown['buff']?.lock, cooldown['buff']?.time, true)} GAPPLE ${rateComboValue(cooldown['gapple']?.lock, cooldown['gapple']?.time, true)} PEARL ${rateComboValue(cooldown['pearl']?.lock, cooldown['pearl']?.time, true)} ` +
-  `HAND ${rateBoolValue(lockValue['hand'],true)} OFF-HAND ${rateBoolValue(lockValue['off-hand'],true)}\n` +
-  `HSR ${rateIntValue(100,((pvpHitSuccess/pvpHitAttempts)*100))} ` +
-  `JESUS isOver ${rateBoolValue(isOverLiquid)} isTouching ${rateBoolValue(isTouchingLiquid)} ` + 
-  `STRAFE RDY ${rateBoolValue(bot.entity.onGround)} ` + 
-  `CONTROL ${rateBoolValue(bot.getControlState('forward'))} ${rateBoolValue(bot.getControlState('sprint'))} ${rateBoolValue(bot.getControlState('jump'))} `
+  `HURT ${rateIntValue(cooldown['hurt']?.time, 3, [50,0], true)} ` +
+  `PVP ${rateIntValue(cooldown['pvp']?.time, 14, [50,0], true)} BUFF ${rateIntValue(cooldown['buff']?.time, 14, [50,0], true)} GAPPLE ${rateIntValue(cooldown['gapple']?.time, 14, [50,0], true)} PEARL ${rateIntValue(cooldown['pearl']?.time, 14, [50,0], true)} ` +
+  `HAND ${rateBoolValue(lockValue['hand'], true)} OFF-HAND ${rateBoolValue(lockValue['off-hand'], true)}\n` +
+  `HSR ${rateIntValue((pvpHitSuccess/pvpHitAttempts) || 0, 1)} `
   renderFunctionBox(banner);
-}, 50);
+}, 250);
 /*
   CLIENT RELATED EVENT HANDLERS
 */
@@ -1219,17 +1234,18 @@ function startClient() {
   });
   bot.on('path_reset', async (path) => await unstuck(path));
   bot.on('scoreRemoved', () => {
-    if (cooldown['pvp'].lock || !bot.players[master]) return;
-    const dynamicKeyRegex = /^\s*.*Денег:.*\$$/;
-    const dynamicKey = Object.keys(bot.scoreboards.JampireBoard.itemsMap).find(key => dynamicKeyRegex.test(key));
-    const match = /\d+/.exec(bot.scoreboards.JampireBoard.itemsMap[dynamicKey]?.name.toString());
-    const value = match ? match[0] : null;
-    if (value > 0) bot.chat(`/pay ${master} ${value}`);
+    moneyValue = getScoreBoardInfo(/^\s*.*Денег:.*\$$/);
+    killValue = getScoreBoardInfo(/^\s*.*Убийств:.*$/);
+    deathValue = getScoreBoardInfo(/^\s*.*Смертей:.*$/);
+    if (!cooldown['pvp'].lock && bot.players[master] && moneyValue > 0) bot.chat(`/pay ${master} ${moneyValue}`);
   });
-  bot.on('attackedTarget', () => { pvpHitAttempts++; });
-  bot.on('entityHurt', (entity) => {
-    entity.username === bot.pvp.target?.username && pvpHitSuccess++
+
+  bot.on('attackedTarget', () => { 
+    pvpHitAttempts++; 
+  }).on('entityHurt', (entity) => {
+    entity.username === bot.pvp.target?.username && pvpHitSuccess++;
     if (entity.username === bot.username) {
+      handleCooldown(3, 'hurt')
       if (oldHealth === 0) {
         oldHealth = (bot.health+bot.entity?.metadata[11]);
       } else if (oldHealth != 0) {
@@ -1243,23 +1259,28 @@ function startClient() {
   bot.on('particle', (particle) => {
     const floorParticle = floorVec3(particle.position);
     const floorBot = floorVec3(bot.entity.position);
-    if (particle.id === 45 && floorParticle.x === floorBot.x && floorParticle.y === floorBot.y && floorParticle.z === floorBot.z) {
-      renderChatBox(`${status.pvp}Critical hit from bot`);
-    }
+    if (particle.id === 45 && floorParticle.x === floorBot.x && floorParticle.y === floorBot.y && floorParticle.z === floorBot.z) renderChatBox(`${status.pvp}Critical hit from bot`);
   })
+
   bot.on('death', async() => {
-    renderChatBox(`${status.info}${bot.username} has died, waiting for ${Math.ceil((cooldown['pvp'].time ?? 1) *20)} ticks`);
     resetCombat();
-    await bot.waitForTicks(Math.ceil((cooldown['pvp'].time ?? 1)*20 + 5));
+    renderChatBox(`${status.error}Died. Waiting ${Math.ceil((cooldown['pvp'].time ?? 1) * 20)} ticks`);
+    await bot.waitForTicks(Math.ceil((cooldown['pvp'].time ?? 1))*20);
     await restoreLoadout();
-    const zoneArray = ['',2,4,3];
+
+    const zoneArray = ['',2,3,4];
     const zone = Math.floor(Math.random() * zoneArray.length);
+
     if (combatMode === 2) bot.chat(`/warp play${zoneArray[zone]}`); else bot.chat(`/home home`);
+  }).on('kicked', function(reason) {
+    renderChatBox(`${status.error}Kicked: ${reason}`);
+  }).on('end', (reason) => {
+    renderChatBox(`${status.error}End: ${reason}`);
+    setTimeout(function() {
+      startClient();
+    }, 10000)
   });
-  bot.on('end', (reason) => {
-    renderChatBox(`${status.error}Bot ended ${reason}, attempting to recover...`);
-    startClient();
-  });
+
   const t1 = performance.now();
   renderChatBox(`${status.ok}All event handlers initialized in ${(t1 - t0).toFixed(2)}ms`);
 }
@@ -1271,13 +1292,17 @@ process.on('warning', (err) => renderError(err));
 
 screen.key(['C-z'], () => logBox.focus());
 screen.key(['C-x'], () => chatBox.focus());
+screen.key(['C-r'], () => {
+  bot.end();
+  process.exit(0);
+});
 screen.key(['return', 'enter'], () => {
   inputBox.submit();
   inputBox.focus();
 });
 screen.key(['escape'], () => {
   bot.end();
-  process.exit(0);
+  process.exit(1);
 });
 
 inputBox.on('submit', async (data) => cliCommands(data));
