@@ -38,7 +38,6 @@ const config = {
   //checkTimeoutInterval: 15*1000,
   version: '1.12.2'
 }
-
 const options = {
   itemCooldown: 14,
   healthOffset: 3
@@ -66,11 +65,10 @@ const status = {
 
 let bot = mineflayer.createBot(config);
 
-let moneyValue = 0;
-
 let isLogging = true;
 let isAutoEquipping = true;
 let isWindowLocked = false;
+let isWindowClickLocked = false;
 let isSilent = true;
 let isHunting = false;
 let isHealing = false;
@@ -102,9 +100,7 @@ const cylinder2 = {
   radius: 45.9,
   height: 255
 };
-/*
-  NBT DATA
-*/
+/* LOADOUT NBT DATA */
 const bootsNbt =
 { type: 'compound', name: '', value: { display: { type: 'compound', value: { Lore: { type: 'list', value: { type: 'string', value: [ 'BOOTS' ] } } } }, CanDestroy: { type: 'list', value: { type: 'end', value: [] } }, ench: { type: 'list', value: { type: 'compound', value: [ { id: { type: 'short', value: 0 }, lvl: { type: 'short', value: 4 } }, { id: { type: 'short', value: 1 }, lvl: { type: 'short', value: 4 } }, { id: { type: 'short', value: 2 }, lvl: { type: 'short', value: 4 } }, { id: { type: 'short', value: 3 }, lvl: { type: 'short', value: 4 } }, { id: { type: 'short', value: 4 }, lvl: { type: 'short', value: 4 } }, { id: { type: 'short', value: 8 }, lvl: { type: 'short', value: 3 } },/*FW{ id: { type: 'short', value: 9 }, lvl: { type: 'short', value: 2 } },*/ { id: { type: 'short', value: 34 }, lvl: { type: 'short', value: 3 } }, { id: { type: 'short', value: 70 }, lvl: { type: 'short', value: 1 } }, { id: { type: 'short', value: 71 }, lvl: { type: 'short', value: 1 } } ] } } } }
 const leggingsNbt =
@@ -120,6 +116,7 @@ const potionNbt =
 const nbtBlock =
 {BOOTS: bootsNbt, LEGGINGS: leggingsNbt, CHESTPLATE: chestplateNbt, HELMET: helmetNbt, SWORD: swordNbt, POTION: potionNbt, NONE: null};
 
+/* COOLDOWNS & THROTTLES */
 const cooldown = {};
 const cooldownTypes = ['pvp','gapple','pearl','buff','hurt']
 for (const type of cooldownTypes) cooldown[type] = {time: 0, lock: false};
@@ -132,6 +129,9 @@ const strikeValue = {};
 const strikeValueTypes = ['passive','gapple','totem','armor','buff','pearl','junk','pvp'];
 for (const type of strikeValueTypes) strikeValue[type] = 0;
 
+let reconnectDelay = 10000;
+
+/* DYNAMIC VALUES */
 let oldHealth = 0;
 let newHealth = 0;
 let deltaHealth = 0;
@@ -574,19 +574,6 @@ function getFeatherTrajectory(distance) {
   if (Math.abs(sineTheta) > 1) throw new Error(`${status.error}Distance too far for initial velocity.`);
   return distance * Math.sin(0.5 * Math.asin(sineTheta));
 }
-function rateBoolValue(currentBool, isReverse) {
-  const statusType = isReverse ? (currentBool ? "bad" : "good") : (currentBool ? "good" : "bad");
-  return `${status[statusType]}${currentBool}{/}`;
-}
-function rateIntValue(currentInt, maxInt, pctCurve, isReverse) {
-  const [pctBoundaryOne, pctBoundaryTwo] = pctCurve || [66.66, 33.33];
-  const percentage = (parseInt(currentInt, 10) / parseInt(maxInt, 10)) * 100;
-  const roundedCurrent = Math.round(currentInt * 100) / 100;
-  const statusType = isReverse ? 
-    (percentage > pctBoundaryOne ? "bad" : percentage > pctBoundaryTwo ? "mediocre" : "good"):
-    (percentage > pctBoundaryOne ? "good" : percentage > pctBoundaryTwo ? "mediocre" : "bad");
-  return `${status[statusType]}${roundedCurrent}{/}`;
-}
 function floorVec3(vec3) {
   return {
       x: Math.floor(vec3.x),
@@ -647,7 +634,7 @@ function updateWebBlocks() {
 */
 function resetVelocity() {
   if ((isOverLiquid || isTouchingLiquid) && !bot.pathfinder?.isMoving()) {
-    // retard mode but works? rewrite this to include more logic vvv
+// rewrite
     bot.entity.velocity.set(0,-0.08,0);
   }
 }
@@ -742,6 +729,19 @@ function renderTable(headers, rows, type) {
   rows.forEach(row => {
       renderChatBox(`${formatRow(row,type)}`);
   });
+}
+function rateBoolValue(currentBool, isReverse) {
+  const statusType = isReverse ? (currentBool ? "bad" : "good") : (currentBool ? "good" : "bad");
+  return `${status[statusType]}${currentBool}{/}`;
+}
+function rateIntValue(currentInt, maxInt, pctCurve, isReverse) {
+  const [pctBoundaryOne, pctBoundaryTwo] = pctCurve || [66.66, 33.33];
+  const percentage = (parseInt(currentInt, 10) / parseInt(maxInt, 10)) * 100;
+  const roundedCurrent = Math.round(currentInt * 100) / 100;
+  const statusType = isReverse ? 
+    (percentage > pctBoundaryOne ? "bad" : percentage > pctBoundaryTwo ? "mediocre" : "good"):
+    (percentage > pctBoundaryOne ? "good" : percentage > pctBoundaryTwo ? "mediocre" : "bad");
+  return `${status[statusType]}${roundedCurrent}{/}`;
 }
 function formatCell(cell, index, type, columnWidths) {
   if (type === 'players') {
@@ -957,7 +957,6 @@ async function equipGapple() {
     const start = performance.now();
     const oldCount = getItemCount('golden_apple');
     renderChatBox(`${status.gapple}${status.info}STARTED Healing function exp: ${!cooldown['hurt'].lock && getItemCount('totem_of_undying') >= 1}`);
-
 
     while (true) {
       if (bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]?.type === gapple.type) {
@@ -1242,27 +1241,170 @@ function huntPlayer() {
 /*
   FUNCTION LOOP 
 */
-// TODO notes
+/* TODO notes
 // if in x seconds delta position less than 1-2 blocks: reset velocity (hack fix using fixed timer for now)
 // heal when not hit for more than 3s (done but not tested yet)
 // use shield in between sword hit cooldowns
 // check y diff between bot and target, if distance is more than attack range: pearl
 // if 2 or more blocks in range of target: reduce/dont strafe
+ARMOR ON bot.health event?
+REWRITE USING CLASSES AND CONSTRUCTORS
+const tasks = [
+  { condition: () => bot.health < 10, action: () => bot.chat("I need healing!"), interval: 1000 },
+  { condition: () => bot.food < 10, action: () => bot.chat("I need food!"), interval: 2000 },
+];
+
+function runTasks() {
+  tasks.forEach(task => {
+    if (task.condition()) {
+      task.action();
+    }
+  });
+  setTimeout(runTasks, 100); // Run tasks every 100ms
+}
+runTasks();
+ INTERESTING ^^^
+
+*/
+//////
+////// EXP
+//////
+class TaskScheduler {
+  constructor() {
+    this.tasks = [];
+  }
+
+  addTask(task) {
+    this.tasks.push(task);
+    this.tasks.sort((a, b) => b.priority - a.priority);
+  }
+
+  async run() {
+    const now = Date.now();
+    for (const task of this.tasks) {
+      if (task.interval && now - task.lastRun < task.interval) continue;
+
+      if (task.dependencies) {
+        const dependenciesMet = task.dependencies.every(dep => this.tasks.find(t => t.id === dep)?.completed);
+        if (!dependenciesMet) continue;
+      }
+
+      if (task.condition()) {
+        //renderChatBox(`${status.debug}Running task: ${task.id}`);
+        try {
+          await runWithTimeout(() => runWithRetries(task.action, task.retries), task.timeout);
+          //renderChatBox(`${status.debug}Task ${task.id} completed successfully`);
+          task.completed = true;
+          task.lastRun = now;
+        } catch (err) {
+          renderError(`Task ${task.id} failed: ${err}`);
+        }
+      }
+    }
+  }
+}
+
+// Helper functions
+async function runWithTimeout(action, timeout = 1000) {
+  return Promise.race([
+    action(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Task timeout')), timeout)),
+  ]);
+}
+
+async function runWithRetries(action, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await action();
+    } catch (err) {
+      renderError(`Attempt ${i + 1} failed: ${err}`);
+    }
+  }
+  throw new Error('Task failed after retries');
+}
+// Initialize and use the scheduler
+const scheduler = new TaskScheduler();
+/*
+  1: HIGHEST
+  2: MID
+  3: LOW
+*/
+scheduler.addTask({
+  id: 'equipArmor',
+  condition: () => !lockValue['armor'],
+  action: equipArmor,
+  priority: 1,
+});
+
+scheduler.addTask({
+  id: 'equipTotem',
+  condition: () => !isHealing && !lockValue['off-hand'] && !lockValue['totem'],
+  action: equipTotem,
+  priority: 1,
+});
+
+scheduler.addTask({
+  id: 'equipGapple',
+  condition: () => !lockValue['gapple'] && cooldown['gapple'].time === 0 && !cooldown['gapple'].lock,
+  action: equipGapple,
+  priority: 2,
+  timeout: 1750,
+});
+
+scheduler.addTask({
+  id: 'equipBuff',
+  condition: () => !isHealing && !lockValue['off-hand'] && !lockValue['buff'] && cooldown['buff'].time === 0 && !cooldown['buff'].lock,
+  action: equipBuff,
+  priority: 2,
+  timeout: 1750,
+});
+
+scheduler.addTask({
+  id: 'tossPearl',
+  condition: () => !isHealing && !lockValue['off-hand'] && !lockValue['pearl'] && cooldown['pearl'].time === 0 && !cooldown['pearl'].lock,
+  action: tossPearl,
+  priority: 2,
+});
+
+scheduler.addTask({
+  id: 'equipPassive',
+  condition: () => !isHealing && !lockValue['hand'] && !lockValue['off-hand'] && (bot.health + (bot.entity?.metadata[11] || 0)) > options.healthOffset + deltaHealth && !lockValue['passive'],
+  action: equipPassive,
+  priority: 3,
+});
+
+scheduler.addTask({
+  id: 'tossJunk',
+  condition: () => !isHealing && !lockValue['hand'] && !lockValue['off-hand'] && (bot.health + (bot.entity?.metadata[11] || 0)) > options.healthOffset + deltaHealth && !lockValue['junk'] && cooldown['pvp'].time === 0,
+  action: tossJunk,
+  priority: 4,
+});
+
+
+// Run the scheduler every 50ms
+setInterval(async () => {
+  if (!isWindowLocked || !isAutoEquipping) return;
+  await scheduler.run();
+}, 50);
+//////
+////// EXP
+//////
 async function functionLoop() {
   if (!isWindowLocked || !isAutoEquipping) return;
   // HIGHEST PRIORITY
-  if (!lockValue['armor']) await equipArmor(); // MAIN HAND
-  if (!lockValue['gapple'] && cooldown['gapple'].time === 0 && !cooldown['gapple'].lock) await equipGapple(); // OFFHAND
-  if (!isHealing && !lockValue['off-hand']) {
+  //if (!lockValue['armor']) await equipArmor(); // MAIN HAND
+  //if (!lockValue['gapple'] && cooldown['gapple'].time === 0 && !cooldown['gapple'].lock) await equipGapple(); // OFFHAND
+  /*if (!isHealing && !lockValue['off-hand']) {
     if (!lockValue['totem']) equipTotem(); // OFFHAND
     if (!lockValue['buff'] && cooldown['buff'].time === 0 && !cooldown['buff'].lock) await equipBuff(); // OFFHAND
     if (!lockValue['pearl'] && cooldown['pearl'].time === 0 && !cooldown['pearl'].lock) await tossPearl(); // OFFHAND
   }
-  // HIGH PRIORITY
+  
+  // LOW PRIORITY
   if (!isHealing && !lockValue['hand'] && !lockValue['off-hand'] && (bot.health+bot.entity?.metadata[11]) > options.healthOffset+deltaHealth) {
     if (!lockValue['passive']) await equipPassive(); // MAIN HAND
     if (!lockValue['junk'] && cooldown['pvp'].time === 0) await tossJunk(); // MAIN HAND
-  }
+  }*/
 }
 
 setInterval(() => {
@@ -1310,6 +1452,17 @@ setInterval(() => {
 /*
   CLIENT RELATED EVENT HANDLERS
 *//* bot.pvp.meleeAttackRate = new pvpLibrary.RandomTicks(10,11); */
+/*
+  REWRITE INTERVALS !!! MEM LEAKS
+*/
+
+let intervals = [];
+
+function clearIntervals() {
+  intervals.forEach(interval => clearInterval(interval));
+  intervals = [];
+}
+
 function startClient() {
   isWindowLocked = false;
   const start = performance.now();
@@ -1344,17 +1497,23 @@ function startClient() {
   
     bot.pvp.viewDistance = 128;
   });
-  //
-  bot.on('physicsTick', async () => await functionLoop());
+  // scheduler written, line useless
+  //bot.on('physicsTick', async () => await functionLoop());
   bot.on('messagestr', (data) => logAbnormalities(data));
   bot.on('message', (data) => chatCommands(data)); 
   bot.on('error', (err) => renderError(err));
-
+  /* LOGIN ONLY */
   bot.on('windowOpen', async (window) => {
-    if (isWindowLocked) return;
-    await bot.clickWindow(0,0,0);
+    if (isWindowLocked || isWindowClickLocked) return;
+    isWindowClickLocked = true;
+    const slot = 1;
+    await bot.waitForTicks(2);
+    await bot.clickWindow(slot,0,0); // 1
+    renderChatBox(`${status.info}Clicking slot ${slot} ${util.inspect(window.slots[slot].displayName)}`);
     await window.close();
+    isWindowClickLocked = false;
   });
+
   bot.on('path_reset', async (path) => await unstuck(path));
   bot.on('scoreRemoved', () => {
     if (!isWindowLocked || !bot.players[master]) return;
@@ -1363,8 +1522,9 @@ function startClient() {
       bot.chat(`/pay ${master} ${getScoreBoardInfo(/^\s*.*Денег:.*\$$/)}`);
     }
   });
+  /* HIT DETECTION */
   bot.on('attackedTarget', () => pvpHitAttempts++);
-  bot.on('entityHurt', (entity) => {
+  /*bot.on('entityHurt', (entity) => {
     entity.username === bot.pvp.target?.username && pvpHitSuccess++;
     if (entity.username === bot.username) {
       handleCooldown(3, 'hurt');
@@ -1382,27 +1542,12 @@ function startClient() {
         [2190.5, 1036.5],
         [2195.5, 968.5]
       ];
-      /*while (true) {
-        for (const coordinate of zoneCoordinates) {
-          const xValue = coordinate[0];
-          const zValue = coordinate[1];
-          const targetX = bot.entity.position.x;
-          const targetZ = bot.entity.position.z;
-
-          if (targetX === xValue && targetZ === zValue) {
-            renderChatBox(`${status.ok}Zone entered`);
-            break;
-          } else {
-           
-          }
-        }
-      }*/     
       const zoneArray = ['',2,3,4];
       const zone = Math.floor(Math.random() * zoneArray.length);
       bot.chat(`/warp play${zoneArray[zone]}`);
       await bot.waitForTicks(60);
     }, cooldown['pvp'].time*1000);
-  });
+  });*/
   bot.on('kicked', (reason) => {
     renderChatBox(`${status.error}Kicked: ${reason}`);
     if (reason.includes('Пожалуйста, попробуйте присоединиться чуть позже.')) {
@@ -1415,7 +1560,6 @@ function startClient() {
       bot.removeAllListeners(event);
       renderChatBox(`${status.info}Removed listeners for ${event}`);
     }
-
     renderChatBox(`${status.error}End: ${reason}`);
     renderChatBox(`${status.info}Reconnecting in ${reconnectDelay}ms`);
 
@@ -1424,11 +1568,9 @@ function startClient() {
     }, reconnectDelay);
     reconnectDelay += 5000;
   });
-
   const end = performance.now();
   renderChatBox(`${status.ok}All event handlers initialized in ${(end - start)}ms`);
 }
-let reconnectDelay = 10000;
 /*
   NON CLIENT RELATED EVENT HANDLERS
 */
