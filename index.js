@@ -418,8 +418,13 @@ async function cliCommands(data) {
       renderChatBox(`${status.ok}isHunting set to ${rateBoolValue(isHunting)}`);
     break;
     case /^fe$/.test(data): {
-      const player = bot.players[master].entity;
-      preventFall(player)
+      const player = bot.nearestEntity(e => e.type === 'player' && 
+        e.position.distanceTo(bot.entity.position) <= 128 &&
+        e.username === master);
+      renderChatBox(`${status.debug}Web ${isInBlock(player, 'web')}`);
+      renderChatBox(`${status.debug}Water ${isInBlock(player, 'water')}`);
+      renderChatBox(`${status.debug}Lava ${isInBlock(player, 'lava')}`);
+
     }
     break;
     case /^s$/.test(data):
@@ -595,6 +600,88 @@ function getMidpointVec3(point1,point2) {
     z: (point1.z + point2.z) / 2
   };
 }
+function isInBlock(entity, block, offset) {
+  const hitboxHeight = 1.8; // Entity hitbox height
+  const hitboxWidth = 0.3 + offset | 0;  // Half-width of the hitbox
+
+  // Convert block to an array if it's not already
+  const blocksToCheck = Array.isArray(block) ? block : [block];
+
+  // Get the entity's position
+  const entityPos = entity.position;
+
+  // Check the vertical faces (front, back, left, right)
+  for (let dy = 0; dy <= hitboxHeight; dy += 1) { // Check vertically
+    // Front face (positive z-axis)
+    const frontBlock = bot.blockAt(entityPos.offset(0, dy, hitboxWidth));
+    if (frontBlock && blocksToCheck.includes(frontBlock.name)) {
+      return true; // Collision detected on front face
+    }
+
+    // Back face (negative z-axis)
+    const backBlock = bot.blockAt(entityPos.offset(0, dy, -hitboxWidth));
+    if (backBlock && blocksToCheck.includes(backBlock.name)) {
+      return true; // Collision detected on back face
+    }
+
+    // Left face (negative x-axis)
+    const leftBlock = bot.blockAt(entityPos.offset(-hitboxWidth, dy, 0));
+    if (leftBlock && blocksToCheck.includes(leftBlock.name)) {
+      return true; // Collision detected on left face
+    }
+
+    // Right face (positive x-axis)
+    const rightBlock = bot.blockAt(entityPos.offset(hitboxWidth, dy, 0));
+    if (rightBlock && blocksToCheck.includes(rightBlock.name)) {
+      return true; // Collision detected on right face
+    }
+  }
+  return false; // No collision detected
+}
+/*
+2/2 for bot
+3/1 for entity 
+*/
+let lastCallTime = 0; // Timestamp of the last function call
+let cachedBlocks = []; // Cached result of the last function call
+
+function blocksNear(entity, block, maxDistance = 2, count = 2) {
+  const now = Date.now();
+
+  // If the function was called within the last 500ms, return the cached result
+  if (now - lastCallTime < 500) {
+    return cachedBlocks;
+  }
+
+  // Update the last call time
+  lastCallTime = now;
+
+  // Find blocks near the entity
+
+  // rewrite using hitboxes isInBlock
+  const blocks = bot.findBlocks({
+    point: entity?.position,
+    matching: bot.registry.blocksByName[block]?.id,
+    maxDistance,
+    count,
+  });
+
+  // Adjust block positions (center them)
+  const adjustBlockPosition = (block) => {
+    if (block) {
+      block.set(block.x + 0.5, block.y, block.z + 0.5);
+    }
+  };
+
+  // Adjust positions for blocks
+  blocks.forEach(adjustBlockPosition);
+
+  // Cache the result
+  cachedBlocks = blocks;
+
+  return blocks;
+}
+/*
 function updateWebBlocks() {
   botWebBlock = bot.findBlocks({
     point: bot.entity.position,
@@ -629,6 +716,7 @@ function updateWebBlocks() {
     });
   });
 }
+*/
 /*
   FUNCTIONS: PHYSICS
 */
@@ -1213,10 +1301,25 @@ function filterEntity() {
       return e => e.type === 'player' &&
                   e.position.distanceTo(bot.entity.position) <= 128 &&
                   e.username === targetPlayer.username;
+    default:
+      return null;
   }
 }
+/*function combatMovement(entity) {
+  if (!entity) return;
 
-function huntPlayer() {
+  if (isOverLiquid && !bot.pathfinder?.isMoving()) bot.setControlState('forward', true);
+  if (bot.entity.isInWeb) bot.setControlState('jump', false);
+  
+  strafeMovement(entity);
+}
+function combatTargeting(entity) {
+  if (entity.position.distanceTo(bot.entity.position) <= bot.pvp.attackRange && !bot.pathfinder?.isMoving()) {
+    const yOffset = entity.isInWater || entity.isInLava ? entity.height : entity.height/2;
+    bot.lookAt(entity.position.offset(0, yOffset, 0), true);
+  }
+}
+function combatAttacking() {
   const entity = bot.nearestEntity(filterEntity());
 
   if (!entity) {
@@ -1224,51 +1327,140 @@ function huntPlayer() {
     return;
   }
 
-  if (isOverLiquid && !bot.pathfinder?.isMoving()) bot.setControlState('forward', true);
-  if (bot.entity.isInWeb) bot.setControlState('jump', false);
-  
-  strafeMovement(entity);
+  bot.pvp.attack(entity);
+}*/
+class CombatHandler {
+  constructor(bot) {
+    this.bot = bot;
+    this.filterEntity = filterEntity;
+    this.strafe = strafe;
+    this.entity = null; // Store the entity as a property
+  }
 
-  if (entity.position.distanceTo(bot.entity.position) <= bot.pvp.attackRange) {
-    const yOffset = entity.isInWater || entity.isInLava ? entity.height : entity.height/2;
-    if (!bot.pathfinder?.isMoving()) {
-      bot.lookAt(entity.position.offset(0, yOffset, 0), true);
+  // Updates the entity to the nearest valid target
+  updateEntity() {
+    this.entity = this.bot.nearestEntity(this.filterEntity());
+
+    if (!this.entity) {
+      this.bot.pvp.forceStop(); // Stop combat if no entity is found
     }
   }
-  
-  bot.pvp.attack(entity);
+
+  // Handles movement during combat
+  combatMovement() {
+    if (!this.entity) return;
+
+    if (this.isOverLiquid && !this.bot.pathfinder?.isMoving()) {
+      this.bot.setControlState('forward', true);
+    }
+
+    if (this.bot.entity.isInWeb) {
+      this.bot.setControlState('jump', false);
+    }
+
+    this.strafeMovement(this.entity);
+  }
+
+  // Handles targeting (looking at the entity)
+  combatTargeting() {
+    if (!this.entity) return;
+
+    if (this.entity.position.distanceTo(this.bot.entity.position) <= this.bot.pvp.attackRange && !this.bot.pathfinder?.isMoving()) {
+      const yOffset = isInBlock(this.entity, 'water') || isInBlock(this.entity, 'lava') ? this.entity.height : this.entity.height / 2;
+      this.bot.lookAt(this.entity.position.offset(0, yOffset, 0), true);
+    }
+  }
+
+  // Handles attacking the entity
+  combatAttacking() {
+    if (!this.entity) return;
+    this.bot.pvp.attack(this.entity);
+  }
+
+  // Main combat loop
+  combatLoop() {
+    this.updateEntity(); // Update the entity
+    this.combatMovement(); // Handle movement
+    this.combatTargeting(); // Handle targeting
+    this.combatAttacking(); // Handle attacking
+  }
+
+  // Helper function for strafing movement
+  strafeMovement() {
+    if (!this.entity) return;
+    /* Get blocks near entities */
+    this.entityBlock = blocksNear(this.entity, 'web', 3, 1);
+    this.botBlock = blocksNear(this.bot.entity, 'web', 2, 2);
+
+    this.entityPos = [this.entity.position.x, this.entity.position.z];
+
+    this.entityCloseToBlock = this.entityBlock[0] && this.entityBlock[0].distanceTo(this.entity.position) <= 1.5;
+    this.botCloseToBlock = this.botBlock[0] && this.botBlock[0].distanceTo(this.bot.entity.position) <= 1.1;
+
+    this.bot.pvp.followRange = (this.entityCloseToBlock || this.botCloseToBlock || this.preventFall(this.entity)) ? 1 : 5;
+
+    if (!this.isOverLiquid && this.bot.entity.onGround && this.bot.entity.position.distanceTo(this.entity.position) <= this.bot.pvp.followRange && this.bot.pvp.followRange === 5) {
+      if (!this.entityBlock[0]) {
+        strafe(this.entityPos, 30, 0.6);
+      } else {
+        this.entityDistToWebBlock = this.entityBlock[0].distanceTo(this.entity.position);
+        this.strafeSpeed = this.entityDistToWebBlock >= 3.5 ? 0.6 : this.entityDistToWebBlock > 1.5 ? 0.4 : null;//calculateStrafeSpeed(this.entityDistToWebBlock);//
+        if (this.strafeSpeed) {
+          strafe(this.entityPos, 30, this.strafeSpeed);
+        }
+      }
+    }
+  }
+
+  // Helper function to prevent falling
+  preventFall(e) {
+    const b = this.bot.findBlocks({
+      point: e.position.offset(0, -1.5, 0),
+      matching: this.bot.registry.blocksByName.air.id,
+      maxDistance: 0,
+      count: 2,
+    });
+
+    return (b[0].y < e.position.y && b[1].y < e.position.y && b[0].y < b[1].y && b[0].x === b[1].x && b[0].z === b[1].z);
+  }
 }
+
+/// INTERPOLATION STRAFE
+function calculateStrafeSpeed(entityDistToWebBlock) {
+  // Define the range of distances and speeds
+  const minDist = 1.5;  // Minimum distance
+  const maxDist = 3.5;  // Maximum distance
+  const minSpeed = 0.4; // Minimum speed (at minDist)
+  const maxSpeed = 0.6; // Maximum speed (at maxDist)
+
+  // If the distance is outside the range, return null
+  if (entityDistToWebBlock < minDist || entityDistToWebBlock > maxDist) {
+    return null;
+  }
+
+  // Calculate the speed using linear interpolation
+  const speed = minSpeed + ((entityDistToWebBlock - minDist) / (maxDist - minDist)) * (maxSpeed - minSpeed);
+
+  return speed;
+}
+/*
+Fight class rewrite
+as "global"  const entity = bot.nearestEntity(filterEntity());
+
+name 
+combatTargeting
+combatMovement
+combatAttacking
+*/
 /*
   FUNCTION LOOP 
 */
 /* TODO notes
-// if in x seconds delta position less than 1-2 blocks: reset velocity (hack fix using fixed timer for now)
-// heal when not hit for more than 3s (done but not tested yet)
-// use shield in between sword hit cooldowns
-// check y diff between bot and target, if distance is more than attack range: pearl
-// if 2 or more blocks in range of target: reduce/dont strafe
-ARMOR ON bot.health event?
+if in x seconds delta position less than 1-2 blocks: reset velocity (hack fix using fixed timer for now)
+use shield in between sword hit cooldowns
+check y diff between bot and target, if distance is more than attack range: pearl
 REWRITE USING CLASSES AND CONSTRUCTORS
-const tasks = [
-  { condition: () => bot.health < 10, action: () => bot.chat("I need healing!"), interval: 1000 },
-  { condition: () => bot.food < 10, action: () => bot.chat("I need food!"), interval: 2000 },
-];
-
-function runTasks() {
-  tasks.forEach(task => {
-    if (task.condition()) {
-      task.action();
-    }
-  });
-  setTimeout(runTasks, 100); // Run tasks every 100ms
-}
-runTasks();
- INTERESTING ^^^
-
 */
-//////
-////// EXP
-//////
 class TaskScheduler {
   constructor() {
     this.tasks = [];
@@ -1303,7 +1495,6 @@ class TaskScheduler {
     }
   }
 }
-
 // Helper functions
 async function runWithTimeout(action, timeout = 1000) {
   return Promise.race([
@@ -1324,8 +1515,17 @@ async function runWithRetries(action, retries = 3) {
 }
 // Initialize and use the scheduler
 const scheduler = new TaskScheduler();
+const combatHandler = new CombatHandler(bot);
+
+// Run the scheduler every 50ms
+setInterval(async () => {
+  if (!isWindowLocked || !isAutoEquipping) return;
+  await scheduler.run();
+  combatHandler.combatLoop();
+  jesusOnLiquid();
+}, 50);
 /*
-  1: HIGHEST
+  1: HIGH
   2: MID
   3: LOW
 */
@@ -1380,21 +1580,12 @@ scheduler.addTask({
   priority: 4,
 });
 
-
-// Run the scheduler every 50ms
-setInterval(async () => {
-  if (!isWindowLocked || !isAutoEquipping) return;
-  await scheduler.run();
-}, 50);
-//////
-////// EXP
-//////
-async function functionLoop() {
+/*async function functionLoop() {
   if (!isWindowLocked || !isAutoEquipping) return;
   // HIGHEST PRIORITY
   //if (!lockValue['armor']) await equipArmor(); // MAIN HAND
   //if (!lockValue['gapple'] && cooldown['gapple'].time === 0 && !cooldown['gapple'].lock) await equipGapple(); // OFFHAND
-  /*if (!isHealing && !lockValue['off-hand']) {
+  if (!isHealing && !lockValue['off-hand']) {
     if (!lockValue['totem']) equipTotem(); // OFFHAND
     if (!lockValue['buff'] && cooldown['buff'].time === 0 && !cooldown['buff'].lock) await equipBuff(); // OFFHAND
     if (!lockValue['pearl'] && cooldown['pearl'].time === 0 && !cooldown['pearl'].lock) await tossPearl(); // OFFHAND
@@ -1404,24 +1595,13 @@ async function functionLoop() {
   if (!isHealing && !lockValue['hand'] && !lockValue['off-hand'] && (bot.health+bot.entity?.metadata[11]) > options.healthOffset+deltaHealth) {
     if (!lockValue['passive']) await equipPassive(); // MAIN HAND
     if (!lockValue['junk'] && cooldown['pvp'].time === 0) await tossJunk(); // MAIN HAND
-  }*/
-}
-
-setInterval(() => {
-  if (!isWindowLocked) return;
-  jesusOnLiquid();
-  if (isHunting) huntPlayer();
-}, 50);
-
-setInterval(() => {
-  if (!isChatEnabled) renderChatBox(util.inspect(process.memoryUsage()));
-}, 1000);
-
+  }
+}*/
 /* Velocity checks and unstucks */
 setInterval( async () => {
   if (!isWindowLocked || !isAutoEquipping) return;
   resetVelocity();
-  updateWebBlocks();
+  //updateWebBlocks();
   await unstuck();
 }, 2000);
 
@@ -1455,13 +1635,6 @@ setInterval(() => {
 /*
   REWRITE INTERVALS !!! MEM LEAKS
 */
-
-let intervals = [];
-
-function clearIntervals() {
-  intervals.forEach(interval => clearInterval(interval));
-  intervals = [];
-}
 
 function startClient() {
   isWindowLocked = false;
@@ -1506,10 +1679,10 @@ function startClient() {
   bot.on('windowOpen', async (window) => {
     if (isWindowLocked || isWindowClickLocked) return;
     isWindowClickLocked = true;
-    const slot = 1;
+    const slot = 0;
     await bot.waitForTicks(2);
     await bot.clickWindow(slot,0,0); // 1
-    renderChatBox(`${status.info}Clicking slot ${slot} ${util.inspect(window.slots[slot].displayName)}`);
+    renderChatBox(`${status.info}Clicking slot ${slot} ${window.slots[slot]}`);
     await window.close();
     isWindowClickLocked = false;
   });
