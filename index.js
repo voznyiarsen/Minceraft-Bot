@@ -421,9 +421,8 @@ async function cliCommands(data) {
       const player = bot.nearestEntity(e => e.type === 'player' && 
         e.position.distanceTo(bot.entity.position) <= 128 &&
         e.username === master);
-      renderChatBox(`${status.debug}Web ${isInBlock(player, 'web')}`);
-      renderChatBox(`${status.debug}Water ${isInBlock(player, 'water')}`);
-      renderChatBox(`${status.debug}Lava ${isInBlock(player, 'lava')}`);
+        renderChatBox(util.inspect(isInBlock(player, 'web')))
+        renderChatBox(util.inspect(isInBlock(player, 'web', 1.8, 1.2)))
 
     }
     break;
@@ -600,10 +599,103 @@ function getMidpointVec3(point1,point2) {
     z: (point1.z + point2.z) / 2
   };
 }
-function isInBlock(entity, block, offset) {
-  const hitboxHeight = 1.8; // Entity hitbox height
-  const hitboxWidth = 0.3 + offset | 0;  // Half-width of the hitbox
 
+/*
+
+  add ability to switch output from boolean to vec3 xyz coordinates
+  return closest to entity xz and all y coordinates that collided with block
+  block.position's xz coordinates need to be centered with a +0.5 offset
+  block's hitbox is a cube with 1 in width and height
+*/
+function isInBlock(entity, block, hitboxHeight = 1.8, hitboxWidth = 0.3) {
+  // Convert block to an array if it's not already
+  const blocksToCheck = Array.isArray(block) ? block : [block];
+
+  // Get the entity's position
+  const entityPos = entity.position;
+
+  // Array to store collision points
+  const collisionPoints = [];
+
+  // Check the vertical faces (front, back, left, right)
+  for (let dy = 0; dy <= hitboxHeight; dy += 0.3) { // Check vertically
+    // Front face (positive Z-axis)
+    const frontBlock = bot.blockAt(entityPos.offset(0, dy, hitboxWidth));
+    if (frontBlock && blocksToCheck.includes(frontBlock.name)) {
+      collisionPoints.push({
+        x: frontBlock.position.x + 0.5, // Center X
+        y: frontBlock.position.y,      // Y coordinate
+        z: frontBlock.position.z,  // Edge Z (front face)
+        side: 'front'                 // Side of collision
+      });
+    }
+
+    // Back face (negative Z-axis)
+    const backBlock = bot.blockAt(entityPos.offset(0, dy, -hitboxWidth));
+    if (backBlock && blocksToCheck.includes(backBlock.name)) {
+      collisionPoints.push({
+        x: backBlock.position.x + 0.5, // Center X
+        y: backBlock.position.y,      // Y coordinate
+        z: backBlock.position.z + 1,      // Edge Z (back face)
+        side: 'back'                 // Side of collision
+      });
+    }
+
+    // Left face (negative X-axis)
+    const leftBlock = bot.blockAt(entityPos.offset(-hitboxWidth, dy, 0));
+    if (leftBlock && blocksToCheck.includes(leftBlock.name)) {
+      collisionPoints.push({
+        x: leftBlock.position.x + 1,      // Edge X (left face)
+        y: leftBlock.position.y,      // Y coordinate
+        z: leftBlock.position.z + 0.5, // Center Z
+        side: 'left'                 // Side of collision
+      });
+    }
+
+    // Right face (positive X-axis)
+    const rightBlock = bot.blockAt(entityPos.offset(hitboxWidth, dy, 0));
+    if (rightBlock && blocksToCheck.includes(rightBlock.name)) {
+      collisionPoints.push({
+        x: rightBlock.position.x, // Edge X (right face)
+        y: rightBlock.position.y,     // Y coordinate
+        z: rightBlock.position.z + 0.5, // Center Z
+        side: 'right'                // Side of collision
+      });
+    }
+  }
+
+  if (collisionPoints.length === 0) {
+    return null; // No collision detected
+  }
+
+  // Find the closest block based on X and Z coordinates
+  let closestBlock = collisionPoints[0];
+  let closestDistance = Math.hypot(
+    closestBlock.x - entityPos.x,
+    closestBlock.z - entityPos.z
+  );
+
+  for (const point of collisionPoints) {
+    const distance = Math.hypot(
+      point.x - entityPos.x,
+      point.z - entityPos.z
+    );
+    if (distance < closestDistance) {
+      closestBlock = point;
+      closestDistance = distance;
+    }
+  }
+
+  // Extract all Y coordinates where collisions were detected
+  //const yCoordinates = collisionPoints.map(point => point.y);
+
+  return {
+    closestBlock: closestBlock, // Edge coordinates and side of the closest block
+    //yCoordinates: yCoordinates  // All Y coordinates where collisions were detected
+  };
+}
+/*
+function isInBlock(entity, block, hitboxHeight = 1.8, hitboxWidth = 0.3) {
   // Convert block to an array if it's not already
   const blocksToCheck = Array.isArray(block) ? block : [block];
 
@@ -611,7 +703,7 @@ function isInBlock(entity, block, offset) {
   const entityPos = entity.position;
 
   // Check the vertical faces (front, back, left, right)
-  for (let dy = 0; dy <= hitboxHeight; dy += 1) { // Check vertically
+  for (let dy = 0; dy <= hitboxHeight; dy += 0.6) { // Check vertically
     // Front face (positive z-axis)
     const frontBlock = bot.blockAt(entityPos.offset(0, dy, hitboxWidth));
     if (frontBlock && blocksToCheck.includes(frontBlock.name)) {
@@ -632,6 +724,7 @@ function isInBlock(entity, block, offset) {
 
     // Right face (positive x-axis)
     const rightBlock = bot.blockAt(entityPos.offset(hitboxWidth, dy, 0));
+
     if (rightBlock && blocksToCheck.includes(rightBlock.name)) {
       return true; // Collision detected on right face
     }
@@ -657,8 +750,9 @@ function blocksNear(entity, block, maxDistance = 2, count = 2) {
   lastCallTime = now;
 
   // Find blocks near the entity
-
   // rewrite using hitboxes isInBlock
+  // return coordinates xz instead of bool
+  
   const blocks = bot.findBlocks({
     point: entity?.position,
     matching: bot.registry.blocksByName[block]?.id,
@@ -771,6 +865,7 @@ function preventFall(e) {
 }
 function strafeMovement(entity) {
   const entityPos = [entity.position.x,entity.position.z];
+
 
   const entityCloseToWebBlock = entityWebBlock[0] && entityWebBlock[0].distanceTo(entity.position) <= 1.5;
   const botCloseToWebBlock = botWebBlock[0] && botWebBlock[0].distanceTo(bot.entity.position) <= 1.1;
@@ -1276,9 +1371,6 @@ async function restoreLoadout() {
 }
 /*
   FUNCTIONS: TARGETING
-  make individual targeting by username + bypass for gmode 1
-  fly with feather also
-  initial velocity feather is 35m/s
 */
 function filterEntity() {
   switch (combatMode) {
@@ -1305,30 +1397,6 @@ function filterEntity() {
       return null;
   }
 }
-/*function combatMovement(entity) {
-  if (!entity) return;
-
-  if (isOverLiquid && !bot.pathfinder?.isMoving()) bot.setControlState('forward', true);
-  if (bot.entity.isInWeb) bot.setControlState('jump', false);
-  
-  strafeMovement(entity);
-}
-function combatTargeting(entity) {
-  if (entity.position.distanceTo(bot.entity.position) <= bot.pvp.attackRange && !bot.pathfinder?.isMoving()) {
-    const yOffset = entity.isInWater || entity.isInLava ? entity.height : entity.height/2;
-    bot.lookAt(entity.position.offset(0, yOffset, 0), true);
-  }
-}
-function combatAttacking() {
-  const entity = bot.nearestEntity(filterEntity());
-
-  if (!entity) {
-    bot.pvp.forceStop();
-    return;
-  }
-
-  bot.pvp.attack(entity);
-}*/
 class CombatHandler {
   constructor(bot) {
     this.bot = bot;
@@ -1388,8 +1456,9 @@ class CombatHandler {
   // Helper function for strafing movement
   strafeMovement() {
     if (!this.entity) return;
+    // 1.5 strafe speed 0.6 distance max 
     /* Get blocks near entities */
-    this.entityBlock = blocksNear(this.entity, 'web', 3, 1);
+    this.entityBlock = isInBlock(this.entity, 'web', 1.8, 1.5) //blocksNear(this.entity, 'web', 3, 1);
     this.botBlock = blocksNear(this.bot.entity, 'web', 2, 2);
 
     this.entityPos = [this.entity.position.x, this.entity.position.z];
@@ -1404,7 +1473,7 @@ class CombatHandler {
         strafe(this.entityPos, 30, 0.6);
       } else {
         this.entityDistToWebBlock = this.entityBlock[0].distanceTo(this.entity.position);
-        this.strafeSpeed = this.entityDistToWebBlock >= 3.5 ? 0.6 : this.entityDistToWebBlock > 1.5 ? 0.4 : null;//calculateStrafeSpeed(this.entityDistToWebBlock);//
+        this.strafeSpeed = calculateStrafeSpeed(this.entityDistToWebBlock);//this.entityDistToWebBlock >= 3.5 ? 0.6 : this.entityDistToWebBlock > 1.5 ? 0.4 : null;
         if (this.strafeSpeed) {
           strafe(this.entityPos, 30, this.strafeSpeed);
         }
