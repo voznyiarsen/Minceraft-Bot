@@ -421,8 +421,9 @@ async function cliCommands(data) {
       const player = bot.nearestEntity(e => e.type === 'player' && 
         e.position.distanceTo(bot.entity.position) <= 128 &&
         e.username === master);
+        renderChatBox(player.position)
         renderChatBox(util.inspect(isInBlock(player, 'web')))
-        renderChatBox(util.inspect(isInBlock(player, 'web', 1.8, 1.2)))
+        renderChatBox(isInBlock(player, 'web'))
 
     }
     break;
@@ -599,137 +600,60 @@ function getMidpointVec3(point1,point2) {
     z: (point1.z + point2.z) / 2
   };
 }
-
-/*
-
-  add ability to switch output from boolean to vec3 xyz coordinates
-  return closest to entity xz and all y coordinates that collided with block
-  block.position's xz coordinates need to be centered with a +0.5 offset
-  block's hitbox is a cube with 1 in width and height
-*/
 function isInBlock(entity, block, hitboxHeight = 1.8, hitboxWidth = 0.3) {
   // Convert block to an array if it's not already
   const blocksToCheck = Array.isArray(block) ? block : [block];
 
-  // Get the entity's position
-  const entityPos = entity.position;
+  // Define the offsets for the corners of the entity's hitbox
+  const cornerOffsets = [
+    new Vec3(-hitboxWidth, 0, -hitboxWidth), // Bottom-left-front corner
+    new Vec3(-hitboxWidth, 0, hitboxWidth),  // Bottom-left-back corner
+    new Vec3(hitboxWidth, 0, -hitboxWidth),  // Bottom-right-front corner
+    new Vec3(hitboxWidth, 0, hitboxWidth),   // Bottom-right-back corner
+    new Vec3(-hitboxWidth, hitboxHeight, -hitboxWidth), // Top-left-front corner
+    new Vec3(-hitboxWidth, hitboxHeight, hitboxWidth),  // Top-left-back corner
+    new Vec3(hitboxWidth, hitboxHeight, -hitboxWidth),  // Top-right-front corner
+    new Vec3(hitboxWidth, hitboxHeight, hitboxWidth)    // Top-right-back corner
+  ];
 
-  // Array to store collision points
-  const collisionPoints = [];
-
-  // Check the vertical faces (front, back, left, right)
-  for (let dy = 0; dy <= hitboxHeight; dy += 0.3) { // Check vertically
-    // Front face (positive Z-axis)
-    const frontBlock = bot.blockAt(entityPos.offset(0, dy, hitboxWidth));
-    if (frontBlock && blocksToCheck.includes(frontBlock.name)) {
-      collisionPoints.push({
-        x: frontBlock.position.x + 0.5, // Center X
-        y: frontBlock.position.y,      // Y coordinate
-        z: frontBlock.position.z,  // Edge Z (front face)
-        side: 'front'                 // Side of collision
-      });
-    }
-
-    // Back face (negative Z-axis)
-    const backBlock = bot.blockAt(entityPos.offset(0, dy, -hitboxWidth));
-    if (backBlock && blocksToCheck.includes(backBlock.name)) {
-      collisionPoints.push({
-        x: backBlock.position.x + 0.5, // Center X
-        y: backBlock.position.y,      // Y coordinate
-        z: backBlock.position.z + 1,      // Edge Z (back face)
-        side: 'back'                 // Side of collision
-      });
-    }
-
-    // Left face (negative X-axis)
-    const leftBlock = bot.blockAt(entityPos.offset(-hitboxWidth, dy, 0));
-    if (leftBlock && blocksToCheck.includes(leftBlock.name)) {
-      collisionPoints.push({
-        x: leftBlock.position.x + 1,      // Edge X (left face)
-        y: leftBlock.position.y,      // Y coordinate
-        z: leftBlock.position.z + 0.5, // Center Z
-        side: 'left'                 // Side of collision
-      });
-    }
-
-    // Right face (positive X-axis)
-    const rightBlock = bot.blockAt(entityPos.offset(hitboxWidth, dy, 0));
-    if (rightBlock && blocksToCheck.includes(rightBlock.name)) {
-      collisionPoints.push({
-        x: rightBlock.position.x, // Edge X (right face)
-        y: rightBlock.position.y,     // Y coordinate
-        z: rightBlock.position.z + 0.5, // Center Z
-        side: 'right'                // Side of collision
-      });
-    }
-  }
-
-  if (collisionPoints.length === 0) {
-    return null; // No collision detected
-  }
-
-  // Find the closest block based on X and Z coordinates
-  let closestBlock = collisionPoints[0];
-  let closestDistance = Math.hypot(
-    closestBlock.x - entityPos.x,
-    closestBlock.z - entityPos.z
-  );
-
-  for (const point of collisionPoints) {
-    const distance = Math.hypot(
-      point.x - entityPos.x,
-      point.z - entityPos.z
-    );
-    if (distance < closestDistance) {
-      closestBlock = point;
-      closestDistance = distance;
-    }
-  }
-
-  // Extract all Y coordinates where collisions were detected
-  //const yCoordinates = collisionPoints.map(point => point.y);
-
-  return {
-    closestBlock: closestBlock, // Edge coordinates and side of the closest block
-    //yCoordinates: yCoordinates  // All Y coordinates where collisions were detected
-  };
-}
-/*
-function isInBlock(entity, block, hitboxHeight = 1.8, hitboxWidth = 0.3) {
-  // Convert block to an array if it's not already
-  const blocksToCheck = Array.isArray(block) ? block : [block];
-
-  // Get the entity's position
-  const entityPos = entity.position;
-
-  // Check the vertical faces (front, back, left, right)
+  // Check the vertical faces (front, back, left, right) and corners
   for (let dy = 0; dy <= hitboxHeight; dy += 0.6) { // Check vertically
-    // Front face (positive z-axis)
-    const frontBlock = bot.blockAt(entityPos.offset(0, dy, hitboxWidth));
+    // Front face (positive Z-axis)
+    const frontBlock = bot.blockAt(entity.position.offset(0, dy, hitboxWidth));
     if (frontBlock && blocksToCheck.includes(frontBlock.name)) {
       return true; // Collision detected on front face
     }
 
-    // Back face (negative z-axis)
-    const backBlock = bot.blockAt(entityPos.offset(0, dy, -hitboxWidth));
+    // Back face (negative Z-axis)
+    const backBlock = bot.blockAt(entity.position.offset(0, dy, -hitboxWidth));
     if (backBlock && blocksToCheck.includes(backBlock.name)) {
       return true; // Collision detected on back face
     }
 
-    // Left face (negative x-axis)
-    const leftBlock = bot.blockAt(entityPos.offset(-hitboxWidth, dy, 0));
+    // Left face (negative X-axis)
+    const leftBlock = bot.blockAt(entity.position.offset(-hitboxWidth, dy, 0));
     if (leftBlock && blocksToCheck.includes(leftBlock.name)) {
       return true; // Collision detected on left face
     }
 
-    // Right face (positive x-axis)
-    const rightBlock = bot.blockAt(entityPos.offset(hitboxWidth, dy, 0));
-
+    // Right face (positive X-axis)
+    const rightBlock = bot.blockAt(entity.position.offset(hitboxWidth, dy, 0));
     if (rightBlock && blocksToCheck.includes(rightBlock.name)) {
       return true; // Collision detected on right face
     }
+
+    // Check corners of the entity's hitbox
+    for (const offset of cornerOffsets) {
+      const cornerPos = entity.position.offset(offset.x, offset.y, offset.z);
+      const cornerBlock = bot.blockAt(cornerPos);
+      if (cornerBlock && blocksToCheck.includes(cornerBlock.name)) {
+        return true; // Collision detected on a corner
+      }
+    }
   }
-  return false; // No collision detected
+
+  // No collision detected
+  return false;
 }
 /*
 2/2 for bot
@@ -742,7 +666,7 @@ function blocksNear(entity, block, maxDistance = 2, count = 2) {
   const now = Date.now();
 
   // If the function was called within the last 500ms, return the cached result
-  if (now - lastCallTime < 500) {
+  if (now - lastCallTime < 200) {
     return cachedBlocks;
   }
 
@@ -750,9 +674,6 @@ function blocksNear(entity, block, maxDistance = 2, count = 2) {
   lastCallTime = now;
 
   // Find blocks near the entity
-  // rewrite using hitboxes isInBlock
-  // return coordinates xz instead of bool
-  
   const blocks = bot.findBlocks({
     point: entity?.position,
     matching: bot.registry.blocksByName[block]?.id,
@@ -775,42 +696,6 @@ function blocksNear(entity, block, maxDistance = 2, count = 2) {
 
   return blocks;
 }
-/*
-function updateWebBlocks() {
-  botWebBlock = bot.findBlocks({
-    point: bot.entity.position,
-    matching: bot.registry.blocksByName.web.id,
-    maxDistance: 2,
-    count: 2,
-  });
-  entityWebBlock = bot.findBlocks({
-    point: bot.pvp.target?.position,
-    matching: bot.registry.itemsByName.web.id,
-    maxDistance: 3,
-    count: 1,
-  });
-  const botPositionClone = bot.entity.position.clone();
-  const deltaPosition = bot.entity.position.y - floorVec3(botPositionClone).y;
-
-  [entityWebBlock, botWebBlock].forEach(blockArray => {
-    blockArray.forEach(block => {
-      if (blockArray === botWebBlock && block.y) {
-        block.set(
-          block.x + 0.5,
-          block.y + deltaPosition,
-          block.z + 0.5
-        );
-      } else if (block.x && block.y && block.z) {
-        block.set(
-          block.x + 0.5,
-          block.y,
-          block.z + 0.5
-        );
-      }
-    });
-  });
-}
-*/
 /*
   FUNCTIONS: PHYSICS
 */
@@ -851,38 +736,6 @@ function jesusOnLiquid() {
   IF ent pos Y -1.5 and -0.5 air 
   if 2 air below 
 */
-function preventFall(e) { 
-  const b = bot.findBlocks({
-    point: e.position.offset(0,-1.5,0),
-    matching: bot.registry.blocksByName.air.id,
-    maxDistance: 0,
-    count: 2,
-  });
-
-  //renderChatBox(`${status.info}b0: ${b[0]}, b1: ${b[1]}, e.y: ${e.position.y}`);
-
-  return (b[0].y < e.position.y && b[1].y < e.position.y && b[0].y < b[1].y && b[0].x === b[1].x && b[0].z === b[1].z);
-}
-function strafeMovement(entity) {
-  const entityPos = [entity.position.x,entity.position.z];
-
-
-  const entityCloseToWebBlock = entityWebBlock[0] && entityWebBlock[0].distanceTo(entity.position) <= 1.5;
-  const botCloseToWebBlock = botWebBlock[0] && botWebBlock[0].distanceTo(bot.entity.position) <= 1.1;
-  bot.pvp.followRange = (entityCloseToWebBlock || botCloseToWebBlock || preventFall(entity)) ? 1 : 5;
-
-  if (!isOverLiquid && bot.entity.onGround && bot.entity.position.distanceTo(entity.position) <= bot.pvp.followRange && bot.pvp.followRange === 5 ) {
-    if (!entityWebBlock[0]) {
-      strafe(entityPos, 30, 0.6);
-    } else {
-      const entityDistToWebBlock = entityWebBlock[0].distanceTo(entity.position);
-      const strafeSpeed = entityDistToWebBlock >= 3.5 ? 0.6 : entityDistToWebBlock > 1.5 ? 0.4 : null;
-      if (strafeSpeed) {
-        strafe(entityPos, 30, strafeSpeed);
-      }
-    }
-  }
-}
 function strafe(position,angleDegrees,speed) {
   const [velocityX,velocityZ] = getStrafeVelocity(position,angleDegrees,speed);
   if (bot.entity.onGround && !isTouchingLiquid && !isOverLiquid) {
@@ -1124,7 +977,7 @@ async function equipArmor() {
   lockValue['armor'] = false;
 }
 async function equipGapple() {
-  if (lockValue['gapple']) return; // if totem and low and hurt = 0s: heal
+  if (lockValue['gapple']) return;
   lockValue['gapple'] = true;
 
   const totalHealth = bot.health + (bot.entity.metadata[11] || 0);
@@ -1314,7 +1167,7 @@ async function tossJunk() {
     if (item) {
       lockValue['hand'] = true;
       lockValue['off-hand'] = true;
-      await bot.waitForTicks(2);
+      await bot.waitForTicks(3);
       await tossItem(item.type, item.count);
       lockValue['hand'] = false;
       lockValue['off-hand'] = false;
@@ -1402,19 +1255,17 @@ class CombatHandler {
     this.bot = bot;
     this.filterEntity = filterEntity;
     this.strafe = strafe;
-    this.entity = null; // Store the entity as a property
+    this.entity = null;
   }
 
-  // Updates the entity to the nearest valid target
   updateEntity() {
     this.entity = this.bot.nearestEntity(this.filterEntity());
 
     if (!this.entity) {
-      this.bot.pvp.forceStop(); // Stop combat if no entity is found
+      this.bot.pvp.forceStop();
     }
   }
 
-  // Handles movement during combat
   combatMovement() {
     if (!this.entity) return;
 
@@ -1429,17 +1280,14 @@ class CombatHandler {
     this.strafeMovement(this.entity);
   }
 
-  // Handles targeting (looking at the entity)
   combatTargeting() {
     if (!this.entity) return;
 
     if (this.entity.position.distanceTo(this.bot.entity.position) <= this.bot.pvp.attackRange && !this.bot.pathfinder?.isMoving()) {
-      const yOffset = isInBlock(this.entity, 'water') || isInBlock(this.entity, 'lava') ? this.entity.height : this.entity.height / 2;
-      this.bot.lookAt(this.entity.position.offset(0, yOffset, 0), true);
+      this.bot.lookAt(this.entity.position.offset(0, this.entity.eyeHeight, 0), true);
     }
   }
 
-  // Handles attacking the entity
   combatAttacking() {
     if (!this.entity) return;
     this.bot.pvp.attack(this.entity);
@@ -1458,22 +1306,22 @@ class CombatHandler {
     if (!this.entity) return;
     // 1.5 strafe speed 0.6 distance max 
     /* Get blocks near entities */
-    this.entityBlock = isInBlock(this.entity, 'web', 1.8, 1.5) //blocksNear(this.entity, 'web', 3, 1);
+    this.entityBlock = blocksNear(this.entity, 'web', 3, 1);
     this.botBlock = blocksNear(this.bot.entity, 'web', 2, 2);
-
+//    renderChatBox(`${status.debug}${this.entityBlock}`)
     this.entityPos = [this.entity.position.x, this.entity.position.z];
-
+    
     this.entityCloseToBlock = this.entityBlock[0] && this.entityBlock[0].distanceTo(this.entity.position) <= 1.5;
-    this.botCloseToBlock = this.botBlock[0] && this.botBlock[0].distanceTo(this.bot.entity.position) <= 1.1;
-
-    this.bot.pvp.followRange = (this.entityCloseToBlock || this.botCloseToBlock || this.preventFall(this.entity)) ? 1 : 5;
+    this.botCloseToBlock = this.botBlock[0] && this.botBlock[0].distanceTo(this.bot.entity.position) <= 1.2;
+  
+    this.bot.pvp.followRange = (this.entityCloseToBlock || this.botCloseToBlock || this.preventFall(this.entity)) || this.bot.entity.isInWeb ? 1 : 5;
 
     if (!this.isOverLiquid && this.bot.entity.onGround && this.bot.entity.position.distanceTo(this.entity.position) <= this.bot.pvp.followRange && this.bot.pvp.followRange === 5) {
       if (!this.entityBlock[0]) {
         strafe(this.entityPos, 30, 0.6);
       } else {
-        this.entityDistToWebBlock = this.entityBlock[0].distanceTo(this.entity.position);
-        this.strafeSpeed = calculateStrafeSpeed(this.entityDistToWebBlock);//this.entityDistToWebBlock >= 3.5 ? 0.6 : this.entityDistToWebBlock > 1.5 ? 0.4 : null;
+        this.entityDistToBlock = this.entityBlock[0].distanceTo(this.entity.position);
+        this.strafeSpeed = this.entityDistToBlock >= 3.5 ? 0.6 : this.entityDistToBlock > 1.5 ? 0.4 : null;
         if (this.strafeSpeed) {
           strafe(this.entityPos, 30, this.strafeSpeed);
         }
@@ -1493,54 +1341,29 @@ class CombatHandler {
     return (b[0].y < e.position.y && b[1].y < e.position.y && b[0].y < b[1].y && b[0].x === b[1].x && b[0].z === b[1].z);
   }
 }
-
-/// INTERPOLATION STRAFE
-function calculateStrafeSpeed(entityDistToWebBlock) {
-  // Define the range of distances and speeds
-  const minDist = 1.5;  // Minimum distance
-  const maxDist = 3.5;  // Maximum distance
-  const minSpeed = 0.4; // Minimum speed (at minDist)
-  const maxSpeed = 0.6; // Maximum speed (at maxDist)
-
-  // If the distance is outside the range, return null
-  if (entityDistToWebBlock < minDist || entityDistToWebBlock > maxDist) {
-    return null;
-  }
-
-  // Calculate the speed using linear interpolation
-  const speed = minSpeed + ((entityDistToWebBlock - minDist) / (maxDist - minDist)) * (maxSpeed - minSpeed);
-
-  return speed;
-}
-/*
-Fight class rewrite
-as "global"  const entity = bot.nearestEntity(filterEntity());
-
-name 
-combatTargeting
-combatMovement
-combatAttacking
-*/
-/*
-  FUNCTION LOOP 
-*/
 /* TODO notes
 if in x seconds delta position less than 1-2 blocks: reset velocity (hack fix using fixed timer for now)
-use shield in between sword hit cooldowns
 check y diff between bot and target, if distance is more than attack range: pearl
-REWRITE USING CLASSES AND CONSTRUCTORS
+*/
+/*
+  SCHEDULER
+  Runs sequentialy
 */
 class TaskScheduler {
   constructor() {
     this.tasks = [];
+    this.isRunning = false; // Flag to prevent overlapping runs
   }
 
   addTask(task) {
     this.tasks.push(task);
-    this.tasks.sort((a, b) => b.priority - a.priority);
+    this.tasks.sort((a, b) => b.priority - a.priority); // Sort by priority
   }
 
   async run() {
+    if (this.isRunning) return; // Prevent overlapping runs
+    this.isRunning = true;
+
     const now = Date.now();
     for (const task of this.tasks) {
       if (task.interval && now - task.lastRun < task.interval) continue;
@@ -1551,20 +1374,21 @@ class TaskScheduler {
       }
 
       if (task.condition()) {
-        //renderChatBox(`${status.debug}Running task: ${task.id}`);
         try {
+          // Run the task and wait for it to complete
           await runWithTimeout(() => runWithRetries(task.action, task.retries), task.timeout);
-          //renderChatBox(`${status.debug}Task ${task.id} completed successfully`);
           task.completed = true;
-          task.lastRun = now;
+          task.lastRun = Date.now();
         } catch (err) {
           renderError(`Task ${task.id} failed: ${err}`);
         }
       }
     }
+
+    this.isRunning = false; // Reset the flag after all tasks are processed
   }
 }
-// Helper functions
+
 async function runWithTimeout(action, timeout = 1000) {
   return Promise.race([
     action(),
@@ -1586,86 +1410,6 @@ async function runWithRetries(action, retries = 3) {
 const scheduler = new TaskScheduler();
 const combatHandler = new CombatHandler(bot);
 
-// Run the scheduler every 50ms
-setInterval(async () => {
-  if (!isWindowLocked || !isAutoEquipping) return;
-  await scheduler.run();
-  combatHandler.combatLoop();
-  jesusOnLiquid();
-}, 50);
-/*
-  1: HIGH
-  2: MID
-  3: LOW
-*/
-scheduler.addTask({
-  id: 'equipArmor',
-  condition: () => !lockValue['armor'],
-  action: equipArmor,
-  priority: 1,
-});
-
-scheduler.addTask({
-  id: 'equipTotem',
-  condition: () => !isHealing && !lockValue['off-hand'] && !lockValue['totem'],
-  action: equipTotem,
-  priority: 1,
-});
-
-scheduler.addTask({
-  id: 'equipGapple',
-  condition: () => !lockValue['gapple'] && cooldown['gapple'].time === 0 && !cooldown['gapple'].lock,
-  action: equipGapple,
-  priority: 2,
-  timeout: 1750,
-});
-
-scheduler.addTask({
-  id: 'equipBuff',
-  condition: () => !isHealing && !lockValue['off-hand'] && !lockValue['buff'] && cooldown['buff'].time === 0 && !cooldown['buff'].lock,
-  action: equipBuff,
-  priority: 2,
-  timeout: 1750,
-});
-
-scheduler.addTask({
-  id: 'tossPearl',
-  condition: () => !isHealing && !lockValue['off-hand'] && !lockValue['pearl'] && cooldown['pearl'].time === 0 && !cooldown['pearl'].lock,
-  action: tossPearl,
-  priority: 2,
-});
-
-scheduler.addTask({
-  id: 'equipPassive',
-  condition: () => !isHealing && !lockValue['hand'] && !lockValue['off-hand'] && (bot.health + (bot.entity?.metadata[11] || 0)) > options.healthOffset + deltaHealth && !lockValue['passive'],
-  action: equipPassive,
-  priority: 3,
-});
-
-scheduler.addTask({
-  id: 'tossJunk',
-  condition: () => !isHealing && !lockValue['hand'] && !lockValue['off-hand'] && (bot.health + (bot.entity?.metadata[11] || 0)) > options.healthOffset + deltaHealth && !lockValue['junk'] && cooldown['pvp'].time === 0,
-  action: tossJunk,
-  priority: 4,
-});
-
-/*async function functionLoop() {
-  if (!isWindowLocked || !isAutoEquipping) return;
-  // HIGHEST PRIORITY
-  //if (!lockValue['armor']) await equipArmor(); // MAIN HAND
-  //if (!lockValue['gapple'] && cooldown['gapple'].time === 0 && !cooldown['gapple'].lock) await equipGapple(); // OFFHAND
-  if (!isHealing && !lockValue['off-hand']) {
-    if (!lockValue['totem']) equipTotem(); // OFFHAND
-    if (!lockValue['buff'] && cooldown['buff'].time === 0 && !cooldown['buff'].lock) await equipBuff(); // OFFHAND
-    if (!lockValue['pearl'] && cooldown['pearl'].time === 0 && !cooldown['pearl'].lock) await tossPearl(); // OFFHAND
-  }
-  
-  // LOW PRIORITY
-  if (!isHealing && !lockValue['hand'] && !lockValue['off-hand'] && (bot.health+bot.entity?.metadata[11]) > options.healthOffset+deltaHealth) {
-    if (!lockValue['passive']) await equipPassive(); // MAIN HAND
-    if (!lockValue['junk'] && cooldown['pvp'].time === 0) await tossJunk(); // MAIN HAND
-  }
-}*/
 /* Velocity checks and unstucks */
 setInterval( async () => {
   if (!isWindowLocked || !isAutoEquipping) return;
@@ -1673,6 +1417,68 @@ setInterval( async () => {
   //updateWebBlocks();
   await unstuck();
 }, 2000);
+
+/* Main loop */
+setInterval(async () => {
+  if (!isWindowLocked || !isAutoEquipping) return;
+  jesusOnLiquid();
+  await scheduler.run();
+  combatHandler.combatLoop();
+}, 50);
+/*
+  TASKS
+  1: HIGH
+  2: MID
+  3: LOW
+
+  todo:
+  rewrite 'cooldown' values to ratelimit using .now() instead of await bot.waitForTicks
+*/
+// REMOVE LOCKVALUES, scheduler fixed
+scheduler.addTask({
+  id: 'equipArmor',
+  condition: () => !lockValue['armor'],
+  action: equipArmor,
+  priority: 1,
+});
+scheduler.addTask({
+  id: 'equipTotem',
+  condition: () => !isHealing && !lockValue['off-hand'] && !lockValue['totem'],
+  action: equipTotem,
+  priority: 1,
+});
+scheduler.addTask({
+  id: 'equipGapple',
+  condition: () => !lockValue['gapple'] && cooldown['gapple'].time === 0 && !cooldown['gapple'].lock,
+  action: equipGapple,
+  priority: 2,
+  timeout: 1750,
+});
+scheduler.addTask({
+  id: 'equipBuff',
+  condition: () => !isHealing && !lockValue['off-hand'] && !lockValue['buff'] && cooldown['buff'].time === 0 && !cooldown['buff'].lock,
+  action: equipBuff,
+  priority: 2,
+  timeout: 1750,
+});
+scheduler.addTask({
+  id: 'tossPearl',
+  condition: () => !isHealing && !lockValue['off-hand'] && !lockValue['pearl'] && cooldown['pearl'].time === 0 && !cooldown['pearl'].lock,
+  action: tossPearl,
+  priority: 2,
+});
+scheduler.addTask({
+  id: 'equipPassive',
+  condition: () => !isHealing && !lockValue['hand'] && !lockValue['off-hand'] && (bot.health + (bot.entity?.metadata[11] || 0)) > options.healthOffset + deltaHealth && !lockValue['passive'],
+  action: equipPassive,
+  priority: 3,
+});
+scheduler.addTask({
+  id: 'tossJunk',
+  condition: () => !isHealing && !lockValue['hand'] && !lockValue['off-hand'] && (bot.health + (bot.entity?.metadata[11] || 0)) > options.healthOffset + deltaHealth && !lockValue['junk'] && cooldown['pvp'].time === 0,
+  action: tossJunk,
+  priority: 4,
+});
 
 setInterval(() => {
   if (!isWindowLocked) return;
@@ -1700,11 +1506,7 @@ setInterval(() => {
 }, 500);
 /*
   CLIENT RELATED EVENT HANDLERS
-*//* bot.pvp.meleeAttackRate = new pvpLibrary.RandomTicks(10,11); */
-/*
-  REWRITE INTERVALS !!! MEM LEAKS
 */
-
 function startClient() {
   isWindowLocked = false;
   const start = performance.now();
