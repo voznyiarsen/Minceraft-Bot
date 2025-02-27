@@ -70,13 +70,11 @@ let isWindowLocked = false;
 let isWindowClickLocked = false;
 let isSilent = true;
 let isCombatEnabled = false;
-//let isHealing = false;
 let isChatEnabled = true;
 let isLobbyLocked = false;
 
 let pvpHitAttempts = 0;
 let pvpHitSuccess = 0;
-//let noPvPCountdownLock = false;
 let pvpCooldown = 0;
 
 let combatMode = 2;
@@ -277,7 +275,7 @@ async function chatCommands(data) {
       if (isSilent) {
         renderChatBox(`${status.warn}isSilent is set to ${rateBoolValue(isSilent)}, not excusing`);
         return;
-      }
+      }//entities.js:836
     break;
     case /^Вы сможете использовать золотое яблоко через \d+ секунд.*\.$/.test(data): {
       const regex = /\d+/;
@@ -292,7 +290,7 @@ async function chatCommands(data) {
       const value = match ? parseInt(match[0],10) : null;
       pvpCooldown = value;
       pvpLastT = performance.now() + (value * 1000) - 12000;
-      renderChatBox(`${status.info}Set pvpLastT to ${value * 1000 - 12000}`)
+      //renderChatBox(`${status.info}Set pvpLastT to ${value * 1000 - 12000}`)
     break;
     // 10 + x = 14
     case /^Вы сможете использовать Жемчуг Края через \d+ сек\.$/.test(data): {
@@ -396,9 +394,9 @@ async function cliCommands(data) {
         e.position.distanceTo(bot.entity.position) <= 128 &&
         e.username === master);
         renderChatBox(player.position)
-        renderChatBox(util.inspect(isInBlock(player, 'web')))
-        renderChatBox(isInBlock(player, 'web'))
-
+        renderChatBox(`${status.debug}Web?: ${isInBlock(player, 'web')}`)
+        renderChatBox(`${status.debug}Lava?: ${isInBlock(player, 'lava')}`)
+        renderChatBox(`${status.debug}Water?: ${isInBlock(player, 'water')}`)
     }
     break;
     case /^s$/.test(data):
@@ -669,13 +667,17 @@ async function unstuck(path) {
     isCombatEnabled = true;
   }
 }
+
+/* rewrite to use isInBlock
 function jesusOnLiquid() {
-  /* check if block below/at bot position is liquid */
+  // check if block below/at bot position is liquid 
   const roundedBotPosition = roundVec3(bot.entity.position);
   const liquidBelow = bot.blockAt(new Vec3(bot.entity.position.x, roundedBotPosition.y - 0.5, bot.entity.position.z));
   isOverLiquid = liquidBelow && (liquidBelow.name === 'water' || liquidBelow.name === 'lava');
 
   const liquidBoundary = bot.blockAt(bot.entity.position);
+  isInBlock(bot.entity, 'water');
+  isInBlock(bot.entity, 'lava');
   if (bot.entity.isInWater || bot.entity.isInLava || liquidBoundary && (liquidBoundary.name === 'water' || liquidBoundary.name === 'lava')) {
     isTouchingLiquid = true;
 
@@ -683,6 +685,21 @@ function jesusOnLiquid() {
     bot.setControlState('jump', false);
   } else {
     isTouchingLiquid = false;
+  }
+}
+*/
+let isLiquidBelow = false;
+function jesusOnLiquid() {
+  const roundedPosition = roundVec3(bot.entity.position);
+  const blockList = ['water','lava'];
+  isLiquidBelow = blockList.includes(bot.blockAt(new Vec3(bot.entity.position.x, roundedPosition.y - 0.1, bot.entity.position.z)).name);
+
+  const isInLiquid = isInBlock(bot.entity, 'water') || isInBlock(bot.entity, 'lava');
+  
+  // force-disable jumping if liquid
+  if (isLiquidBelow) bot.setControlState('jump', false);
+  if (isInLiquid) {
+    bot.entity.velocity.set(bot.entity.velocity.x,0.11,bot.entity.velocity.z);
   }
 }
 /*
@@ -1067,7 +1084,7 @@ async function tossPearl() {
         resolve(); // Resolve if no pearl or target is found
         return;
       }
-
+      // if over liquid and not moved for 1s over 1 block = pearl
       const start = performance.now();
 
       isCombatEnabled = false;
@@ -1127,9 +1144,6 @@ async function tossPearl() {
     }
   });
 }
-bot.on('forcedMove', () => {
-  renderChatBox(`${status.debug}Moved: ${bot.entity.position}`)
-})
 async function equipPassive() {
   return new Promise(async (resolve, reject) => {
     try {
@@ -1140,9 +1154,8 @@ async function equipPassive() {
 
       for (const piece of itemPieces) {
         if (piece.item && piece.slotCheck?.type !== piece.item.type && (piece.slot === 'off-hand' || piece.item.enchants.length >= 8)) {
-          renderChatBox(`${status.passive}${piece.item.displayName} START`);
+          renderChatBox(`${status.passive}${status.info}Equipping ${piece.item.displayName} to ${piece.slot}...`);
           await equipItem(piece.item.type, piece.slot);
-          renderChatBox(`${status.passive}${piece.item.displayName} END`);
         }
       }
 
@@ -1166,7 +1179,6 @@ async function tossJunk() {
           await tossItem(item.type, item.count);
         }
       }
-
       resolve(); // Resolve when all junk items are tossed
     } catch (err) {
       reject(err); // Reject if an error occurs
@@ -1410,7 +1422,7 @@ setInterval(async () => {
   jesusOnLiquid();
   await scheduler.run();
   if (isCombatEnabled) combatHandler.combatLoop();
-}, 100);
+}, 50);
 /*
   on fail add 100ms to cooldown
 */
@@ -1434,7 +1446,7 @@ scheduler.addTask({
   condition: () => true,
   action: equipGapple,
   priority: 2,
-  timeout: 1700,
+  timeout: 2100,
 });
 scheduler.addTask({
   id: 'equipBuff',
@@ -1465,46 +1477,80 @@ scheduler.addTask({
   timeout: 1000,
 });
 
-setInterval(() => {
+function updateBanner() {
   if (!isWindowLocked) return;
-  const helmetPct = (((363 - bot.inventory.slots[5]?.durabilityUsed) / 363) * 100);
-  const chestplatePct = (((528 - bot.inventory.slots[6]?.durabilityUsed) / 528) * 100);
-  const leggingsPct = (((495 - bot.inventory.slots[7]?.durabilityUsed) / 495) * 100);
-  const bootsPct = (((429 - bot.inventory.slots[8]?.durabilityUsed) / 429) * 100);
-  const totalBotHealth = bot.health+bot.entity?.metadata[11] || 0;
-  const totalTargetHealth = bot.pvp.target?.metadata[7]+bot.pvp.target?.metadata[11] || 0;
-  const distTo = bot.pvp.target?.position.distanceTo(bot.entity.position) || 0;
 
-  const banner =
-  `BOT ${bot.username} ${rateIntValue(totalBotHealth, 36, [55,30])} MODE ${combatMode} ` +
-  `DHealth ${rateIntValue(deltaHealth, 5)} ` +
-  `TARGET ${bot.pvp.target?.username || '----'} ${rateIntValue(totalTargetHealth, 36, [55,30], true)} ` +
-  `DistTo ${rateIntValue(distTo, 20, [50,25], true)} DHeight ${rateIntValue(bot.pvp.target?.position.y-bot.entity.position.y || 0, 10, [50,25], true)}\n` +
-  // INVENTORY
-  `PEARL ${rateIntValue(getItemCount('ender_pearl'), 32)} BUFF ${rateIntValue(getItemCount('potion'), 5)} TOTEM ${rateIntValue(getItemCount('totem_of_undying'), 8)} GAPPLE ${rateIntValue(getItemCount('golden_apple'), 64)} ` + 
-  `ARMOR ${[5, 6, 7, 8].map(i => rateIntValue(getItemCount(`diamond_${['helmet', 'chestplate', 'leggings', 'boots'][i - 5]}`), 6)).join('|')} ARMOR% ${[helmetPct, chestplatePct, leggingsPct, bootsPct].map(rateIntValue).join('|')}\n` +
-  // COMBAT INDICATORS
-  `PVP ${rateBoolValue(performance.now() - pvpLastT > 12000)} ${pvpCooldown} HURT ${rateBoolValue(performance.now() - hurtLastT > 3000)} BUFF ${rateBoolValue(performance.now() - buffCallT > 14000)} GAPPLE ${rateBoolValue(performance.now() - gappleCallT > 14000)} PEARL ${rateBoolValue(performance.now() - pearlCallT > 14000)} ` +
-  `HSR ${rateIntValue((pvpHitSuccess/pvpHitAttempts) || 0, 1)} `
+  // Calculate armor durability percentages
+  const armorSlots = [5, 6, 7, 8];
+  const armorMaxDurability = [363, 528, 495, 429];
+  const armorPct = armorSlots.map((slot, index) => {
+    const durabilityUsed = bot.inventory.slots[slot]?.durabilityUsed || 0;
+    return ((armorMaxDurability[index] - durabilityUsed) / armorMaxDurability[index]) * 100;
+  });
+
+  // Calculate health and distance metrics
+  const totalBotHealth = bot.health + (bot.entity?.metadata[11] || 0);
+  const totalTargetHealth = (bot.pvp.target?.metadata[7] || 0) + (bot.pvp.target?.metadata[11] || 0);
+  const distTo = bot.pvp.target?.position.distanceTo(bot.entity.position) || 0;
+  const heightDiff = (bot.pvp.target?.position.y - bot.entity.position.y) || 0;
+
+  // Calculate item counts
+  const itemCounts = {
+    pearl: getItemCount('ender_pearl'),
+    buff: getItemCount('potion'),
+    totem: getItemCount('totem_of_undying'),
+    gapple: getItemCount('golden_apple'),
+  };
+
+  // Calculate cooldown statuses
+  const now = performance.now();
+  const cooldowns = {
+    pvp: now - pvpLastT > 12000,
+    hurt: now - hurtLastT > 3000,
+    buff: now - buffCallT > 14000,
+    gapple: now - gappleCallT > 14000,
+    pearl: now - pearlCallT > 14000,
+  };
+
+  // Calculate hit success rate
+  const hsr = (pvpHitSuccess / pvpHitAttempts) || 0;
+
+  // Build the banner
+  const banner = `
+    BOT ${bot.username} ${rateIntValue(totalBotHealth, 36, [55, 30])} MODE ${combatMode} DHealth ${rateIntValue(deltaHealth, 5)} TARGET ${bot.pvp.target?.username || '----'} ${rateIntValue(totalTargetHealth, 36, [55, 30], true)} DistTo ${rateIntValue(distTo, 20, [50, 25], true)} DHeight ${rateIntValue(heightDiff, 10, [50, 25], true)}
+    PEARL ${rateIntValue(itemCounts.pearl, 32)} BUFF ${rateIntValue(itemCounts.buff, 5)} TOTEM ${rateIntValue(itemCounts.totem, 8)} GAPPLE ${rateIntValue(itemCounts.gapple, 64)} ARMOR ${armorSlots.map((slot, index) => rateIntValue(getItemCount(`diamond_${['helmet', 'chestplate', 'leggings', 'boots'][index]}`), 6)).join('|')} ARMOR% ${armorPct.map(rateIntValue).join('|')}
+    PVP ${rateBoolValue(cooldowns.pvp)} ${pvpCooldown} HURT ${rateBoolValue(cooldowns.hurt)} BUFF ${rateBoolValue(cooldowns.buff)} GAPPLE ${rateBoolValue(cooldowns.gapple)} PEARL ${rateBoolValue(cooldowns.pearl)}
+    HSR ${rateIntValue(hsr, 1)} MEMUSED`;
+
+  // Render the banner
   renderFunctionBox(banner);
-}, 500);
+}
+
+// Call the function every 100ms
+setInterval(updateBanner, 1000);
 /*
   CLIENT RELATED EVENT HANDLERS
 */
+let reconnectInterval;
 function startClient() {
   isWindowLocked = false;
-  const start = performance.now();
-  if (!bot) bot = mineflayer.createBot(config);
+  bot = mineflayer.createBot(config);
 
-  bot.on('inject_allowed', async () => {  
+  if (reconnectInterval) {
+    clearInterval(reconnectInterval);
+    reconnectInterval = null;
+  }
+
+  bot.on('inject_allowed', async () => { 
+    renderChatBox(`${status.debug}'inject_allowed' event fired`);
+
     bot.loadPlugin(pathfinder);
     bot.loadPlugin(pvp);
 
-    bloodhoundPlugin(bot);
-
+    //bloodhoundPlugin(bot);
     await waitForPlugin(bot);
 
-    bot.bloodhound.yaw_correlation_enabled = true;
+    //bot.bloodhound.yaw_correlation_enabled = true;
 
     bot.pvp.movements.infiniteLiquidDropdownDistance = true;
     bot.pvp.movements.allowEntityDetection = true;
@@ -1526,7 +1572,7 @@ function startClient() {
   bot.on('messagestr', (data) => logAbnormalities(data));
   bot.on('message', (data) => chatCommands(data)); 
   bot.on('error', (err) => renderError(err));
-  /* LOGIN ONLY */
+  /* Login phase */
   bot.on('windowOpen', async (window) => {
     if (isWindowLocked || isWindowClickLocked) return;
     isWindowClickLocked = true;
@@ -1534,19 +1580,24 @@ function startClient() {
     if (slot) {
       renderChatBox(`${status.ok}Found slot ${slot}\n${status.ok}${window.slots[slot].name}`);
       await bot.waitForTicks(2);
-      await bot.clickWindow(slot,0,0); // 1
+      await bot.clickWindow(slot,0,0);
     }
     await window.close();
     isWindowClickLocked = false;
   });
 
   bot.on('path_reset', async (path) => await unstuck(path));
+  /* Miscelaneous */
   bot.on('scoreRemoved', () => {
-    if (isWindowLocked && bot.players[master] && performance.now() - pvpLastT > 12000 && getScoreBoardInfo(/^\s*.*Денег:.*\$$/) > 0) {
+    const now = performance.now();
+    if (isWindowLocked && bot.players[master] && now - pvpLastT > 12000 && getScoreBoardInfo(/^\s*.*Денег:.*\$$/) > 0) {
       bot.chat(`/pay ${master} ${getScoreBoardInfo(/^\s*.*Денег:.*\$$/)}`);
     }
   });
-  /* HIT DETECTION */
+  /* Anti-knockback */
+  bot._client.on('entity_velocity', () => { 
+    if (bot.pvp.target) bot.entity.velocity.set(0,bot.entity.velocity.y,0);
+  });
   bot.on('attackedTarget', () => pvpHitAttempts++);
   bot.on('entityHurt', (entity) => {
     entity.username === bot.pvp.target?.username && pvpHitSuccess++;
@@ -1555,13 +1606,16 @@ function startClient() {
       getDeltaHealth();
     }
   });
+  /* Death handling */
   bot.on('death', async() => {
     resetCombat();
-    renderChatBox(`${status.warn}Died. Waiting ${Math.ceil(pvpCooldown * 20)} ticks`);
+    renderChatBox(`${status.info}Died. Waiting ${pvpCooldown + 1} seconds...`);
     setTimeout(async () => {
-      bot.chat(`/home`);
-    }, pvpCooldown + 1);
+      if (combatMode === 2) bot.chat(`/warp play4`); else bot.chat('/home');
+    }, (pvpCooldown + 1) * 1000);
   });
+  /* Disconnect handling 
+  rewrite*/
   bot.on('kicked', (reason) => {
     renderChatBox(`${status.error}Kicked: ${reason}`);
     if (reason.includes('Пожалуйста, попробуйте присоединиться чуть позже.')) {
@@ -1569,21 +1623,34 @@ function startClient() {
       reconnectDelay += 600000;
     }
   });
-  bot.on('end', (reason) => {
-    for (const event of Object.keys(bot._events)) {
-      bot.removeAllListeners(event);
-      renderChatBox(`${status.info}Removed listeners for ${event}`);
-    }
-    renderChatBox(`${status.error}End: ${reason}`);
-    renderChatBox(`${status.info}Reconnecting in ${reconnectDelay}ms`);
 
-    setTimeout(() => {
-      startClient();
-    }, reconnectDelay);
-    reconnectDelay += 5000;
+  bot.on('end', (reason) => {
+    //for (const event of Object.keys(bot._events)) {
+    //  bot.removeAllListeners(event);
+    //  renderChatBox(`${status.info}Removed listeners for ${event}`);
+    //}
+    renderChatBox(`${status.error}Bot ended: ${reason}`);
+    renderChatBox(`${status.info}Reconnecting in ${reconnectDelay/1000} seconds...`);
+    
+    isWindowLocked = false;
+    isAutoEquipping = false;
+
+    scheduleReconnect();
   });
-  const end = performance.now();
-  renderChatBox(`${status.ok}All event handlers initialized in ${(end - start)}ms`);
+}
+function scheduleReconnect() {
+  // Clear any existing reconnect interval
+  if (reconnectInterval) {
+    clearInterval(reconnectInterval);
+    reconnectInterval = null;
+  }
+
+  // Schedule a new reconnect
+  reconnectInterval = setTimeout(() => {
+    bot.end();
+    startClient(); // Restart the client
+    reconnectDelay += 5000; // Increase the reconnect delay
+  }, reconnectDelay);
 }
 /*
   NON CLIENT RELATED EVENT HANDLERS
